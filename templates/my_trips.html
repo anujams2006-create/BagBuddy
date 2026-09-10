@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Trips · BagBuddy</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .my-trips-container {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 54px 24px 88px;
+    }
+    .trips-page-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-end;
+      margin-bottom: 36px;
+    }
+    .trips-page-header h1 {
+      font-size: clamp(2rem, 4vw, 2.8rem);
+      letter-spacing: -0.045em;
+      line-height: 1.1;
+      margin: 8px 0;
+      color: var(--text);
+    }
+    .trips-page-header p {
+      color: var(--muted);
+      margin: 0;
+      font-size: 1.02rem;
+    }
+    .trips-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+      gap: 22px;
+    }
+    .trip-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 6px 20px rgba(95, 55, 25, 0.05);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+    .trip-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 28px rgba(95, 55, 25, 0.09);
+      border-color: var(--border-strong);
+    }
+    .trip-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .trip-mode-pill {
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      background: var(--primary-soft);
+      color: var(--primary-dark);
+      padding: 4px 10px;
+      border-radius: 99px;
+    }
+    .trip-type-pill {
+      font-size: 0.74rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .trip-card-dest {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      margin: 0 0 6px;
+      line-height: 1.2;
+    }
+    .trip-card-dates {
+      font-size: 0.88rem;
+      color: var(--muted);
+      margin: 0 0 16px;
+      font-weight: 550;
+    }
+    .trip-card-specs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      background: #fdfaf6;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 20px;
+    }
+    .spec-unit span {
+      display: block;
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+    .spec-unit strong {
+      font-size: 0.86rem;
+      color: var(--text);
+    }
+    .trip-card-footer {
+      margin-top: auto;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .trip-card-footer .primary-btn {
+      flex: 1;
+      font-size: 0.88rem;
+      min-height: 40px;
+    }
+    .delete-btn {
+      background: #fff;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 8px;
+      min-height: 40px;
+      padding: 0 14px;
+      font-size: 0.85rem;
+      font-weight: 650;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .delete-btn:hover {
+      background: #fff3f1;
+      color: var(--danger);
+      border-color: #f0c9c3;
+    }
+    .empty-trips-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 60px 24px;
+      text-align: center;
+      max-width: 580px;
+      margin: 20px auto;
+    }
+    .empty-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      display: block;
+    }
+    .empty-trips-card h2 {
+      margin: 0 0 8px;
+      font-size: 1.5rem;
+      letter-spacing: -0.03em;
+    }
+    .empty-trips-card p {
+      color: var(--muted);
+      font-size: 0.98rem;
+      line-height: 1.6;
+      margin: 0 0 24px;
+    }
+    @media(max-width: 720px) {
+      .my-trips-container {
+        padding: 36px 16px 64px;
+      }
+      .trips-page-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .trips-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="brand" href="{{ url_for('dashboard') }}">
+    <span aria-hidden="true">🎒</span> BagBuddy
+  </a>
+  <nav aria-label="Main navigation">
+    <a href="{{ url_for('dashboard') }}">Dashboard</a>
+    <a href="{{ url_for('my_trips') }}" style="color: var(--primary);">My trips</a>
+    <a href="{{ url_for('trip_setup') }}">Plan trip</a>
+    <a class="nav-quiet" href="{{ url_for('logout') }}">Log out</a>
+  </nav>
+</header>
+
+<main class="my-trips-container">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-container" aria-live="polite">
+        {% for category, message in messages %}
+          <div class="flash-message {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <section class="trips-page-header">
+    <div>
+      <p class="welcome-badge">SAVED ITINERARIES</p>
+      <h1>My Trips</h1>
+      <p>All your upcoming and past packing plans, stored securely in Supabase.</p>
+    </div>
+    <a href="{{ url_for('trip_setup') }}" class="new-trip-btn">
+      Plan a new trip <span>+</span>
+    </a>
+  </section>
+
+  {% if trips and trips|length > 0 %}
+    <div class="trips-grid">
+      {% for t in trips %}
+        <article class="trip-card">
+          <div class="trip-card-header">
+            <span class="trip-mode-pill">✈ {{ t.travel_mode }}</span>
+            <span class="trip-type-pill">{{ t.trip_type or 'Personal' }}</span>
+          </div>
+
+          <h2 class="trip-card-dest">📍 {{ t.destination|title }}</h2>
+          <p class="trip-card-dates">🗓 {{ t.start_date }} → {{ t.end_date }}</p>
+
+          <div class="trip-card-specs">
+            <div class="spec-unit">
+              <span>Bag allowance</span>
+              <strong>{{ t.bag_type }} ({{ t.weight_limit }} kg)</strong>
+            </div>
+            <div class="spec-unit">
+              <span>Travelers</span>
+              <strong>{{ t.adults }} Adult{% if t.children and t.children > 0 %}, {{ t.children }} Child{% endif %}</strong>
+            </div>
+          </div>
+
+          <div class="trip-card-footer">
+            <a href="{{ url_for('view_trip', trip_id=t.id) }}" class="primary-btn">
+              View Checklist <span>→</span>
+            </a>
+            <form method="POST" action="{{ url_for('delete_trip_route', trip_id=t.id) }}" onsubmit="return confirm('Are you sure you want to delete your trip to {{ t.destination|title }}?');">
+              <button type="submit" class="delete-btn" title="Delete this trip">
+                Delete
+              </button>
+            </form>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <section class="empty-trips-card">
+      <span class="empty-icon" aria-hidden="true">🧳</span>
+      <h2>No saved trips yet</h2>
+      <p>Ready for your next getaway? Plan your journey and BagBuddy will prepare a customized packing checklist.</p>
+      <a href="{{ url_for('trip_setup') }}" class="primary-btn">
+        Plan My First Trip <span>→</span>
+      </a>
+    </section>
+  {% endif %}
+</main>
+
+</body>
+</html>

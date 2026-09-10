@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Dashboard · BagBuddy</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+    <header class="site-header"><a class="brand" href="{{ url_for('dashboard') }}"><span aria-hidden="true">🎒</span>
+            BagBuddy</a>
+        <nav aria-label="Main navigation"><a href="{{ url_for('dashboard') }}">Dashboard</a><a
+                href="{{ url_for('my_trips') }}">My trips</a><a href="{{ url_for('trip_setup') }}">Plan trip</a><a
+                class="nav-quiet" href="{{ url_for('logout') }}">Log out</a></nav>
+    </header>
+    <main class="dashboard-container">
+        <section class="dashboard-header">
+            <div>
+                <p class="welcome-badge">PACKING DASHBOARD</p>
+                <h1>Welcome back, {{ user_name }}.</h1>
+                <p>Keep the details of your next trip in one practical place.</p>
+            </div>
+            <div style="display:flex;gap:10px;"><a href="{{ url_for('my_trips') }}" class="secondary-btn">My Trips</a><a
+                    href="{{ url_for('trip_setup') }}" class="new-trip-btn">Plan a new trip</a></div>
+        </section>
+        {% if not packing_list %}<section class="empty-dashboard">
+            <h2>Your next list starts here.</h2>
+            <p>Add your trip details and BagBuddy will prepare a personalized, categorized list.</p><a
+                href="{{ url_for('trip_setup') }}" class="generate-trip-btn">Plan my trip</a>
+        </section>{% else %}
+        <section class="trip-summary-card">
+            <div class="trip-summary-header">
+                <div>
+                    <p class="trip-label">CURRENT TRIP</p>
+                    <h2>{{ trip['destination']|title }}</h2>
+                </div><span class="trip-status">Active plan</span>
+            </div>
+            <div class="trip-details">
+                <div class="trip-detail"><span>Travel dates</span><strong>{{ trip['start_date'] }} – {{ trip['end_date']
+                        }}</strong></div>
+                <div class="trip-detail"><span>Travel mode</span><strong>{{ trip['travel_mode'] }}</strong></div>
+                <div class="trip-detail"><span>Packing profile</span><strong>{{ trip['profile'] }}</strong></div>
+                <div class="trip-detail"><span>Bag type</span><strong>{{ trip['bag_type'] }}</strong></div>
+            </div>
+        </section>
+        <section class="weight-summary" aria-label="Bag weight">
+            <div class="weight-card"><span>Estimated weight</span>
+                <h2>{{ packing_list['total_weight'] }} kg</h2>
+            </div>
+            <div class="weight-card"><span>Bag limit</span>
+                <h2>{{ packing_list['weight_limit'] }} kg</h2>
+            </div>
+            <div class="weight-card"><span>{% if packing_list['overloaded'] %}Over by{% else %}Remaining{% endif
+                    %}</span>
+                <h2>{% if packing_list['overloaded'] %}{{ (packing_list['total_weight'] -
+                    packing_list['weight_limit'])|round(2) }}{% else %}{{ packing_list['remaining_weight'] }}{% endif %}
+                    kg</h2>
+            </div>
+        </section>
+        {% if packing_list['overloaded'] %}<section class="overload-warning">
+            <div>
+                <h2>Your bag is over the recommended limit.</h2>
+                <p>Estimated weight is {{ packing_list['total_weight'] }} kg against a {{ packing_list['weight_limit']
+                    }} kg limit. Consider removing roughly {{ (packing_list['total_weight'] -
+                    packing_list['weight_limit'])|round(2) }} kg.</p>
+            </div>
+        </section>{% else %}<section class="weight-success">
+            <div>
+                <h2>Your bag is within the limit.</h2>
+                <p>You have {{ packing_list['remaining_weight'] }} kg available for additional items.</p>
+            </div>
+        </section>{% endif %}
+        <section class="packing-section">
+            <div class="packing-section-header">
+                <div>
+                    <p class="section-label">YOUR LIST</p>
+                    <h2>Packing checklist</h2>
+                    <p>{{ packing_list['items']|length }} items organized for this trip.</p>
+                </div>
+                <div class="packing-progress"><span>Packing progress</span><strong id="progressText">0%</strong></div>
+            </div>{% for category, category_items in packing_list['categories'].items() %}<section
+                class="packing-category">
+                <div class="category-header">
+                    <h3>{{ category }}</h3><span class="category-count">{{ category_items|length }} items</span>
+                </div>
+                <div class="packing-items">{% for item in category_items %}<div class="packing-item"><label
+                            class="item-left"><input type="checkbox" class="packing-checkbox"><span
+                                class="custom-checkbox" aria-hidden="true"></span><span class="item-name">{{
+                                item['name'] }}</span></label>
+                        <div class="item-info"><span>Qty {{ item['quantity'] }}</span><span>{{ item['weight'] }}
+                                kg</span></div>
+                    </div>{% endfor %}</div>
+            </section>{% endfor %}
+        </section>{% endif %}
+    </main>
+    <script>document.addEventListener('DOMContentLoaded', () => { const boxes = [...document.querySelectorAll('.packing-checkbox')], progress = document.getElementById('progressText'); function update() { const done = boxes.filter(box => box.checked).length; if (progress) progress.textContent = boxes.length ? Math.round(done / boxes.length * 100) + '%' : '0%'; } boxes.forEach(box => box.addEventListener('change', () => { box.closest('.packing-item').classList.toggle('packed', box.checked); update() })); update() })</script>
+</body>
+
+</html>

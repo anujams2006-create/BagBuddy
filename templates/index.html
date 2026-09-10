@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BagBuddy | Travel packing made practical</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header class="site-header">
+  <a href="{{ url_for('index') }}" class="brand">
+    <span aria-hidden="true">🎒</span> BagBuddy
+  </a>
+  <nav aria-label="Main navigation">
+    {% if session.get('user_id') %}
+      <a href="{{ url_for('dashboard_home') }}">Dashboard</a>
+      <a href="{{ url_for('my_trips') }}">My trips</a>
+      <a href="{{ url_for('trip_setup') }}">Plan trip</a>
+      <a class="nav-quiet" href="{{ url_for('logout') }}">Log out</a>
+    {% else %}
+      <a href="{{ url_for('login') }}">Log in</a>
+      <a class="primary-btn" href="{{ url_for('signup') }}">Create account</a>
+    {% endif %}
+  </nav>
+</header>
+
+<main>
+  <!-- Hero Section with Faded Travel Background -->
+  <div class="hero-wrapper">
+    <section class="home-hero">
+      <div>
+        <p class="eyebrow">PACK SMARTER · TRAVEL LIGHTER</p>
+        <h1>Pack smarter.<br>Travel lighter.</h1>
+        <p>Your personalized packing assistant for every journey. Plan your trip, tailor essentials, and keep your bag within limits before you leave.</p>
+        <div class="hero-actions">
+          {% if session.get('user_id') %}
+            <a class="primary-btn" href="{{ url_for('trip_setup') }}">Plan my trip <span>→</span></a>
+            <a class="secondary-btn" href="{{ url_for('dashboard') }}">View dashboard</a>
+          {% else %}
+            <a class="primary-btn" href="{{ url_for('signup') }}">Plan my trip <span>→</span></a>
+            <a class="secondary-btn" href="{{ url_for('login') }}">Log in</a>
+          {% endif %}
+        </div>
+        <p class="hero-note">Built for vacations, family travel, road trips and hostel shifting.</p>
+      </div>
+
+      <!-- Redesigned "Your Plan" Travel Card -->
+      <aside class="travel-plan-card" aria-label="Your Travel Plan">
+        {% if session.get('current_trip') %}
+          <!-- Active Trip State -->
+          <div class="plan-card-header">
+            <span class="plan-card-eyebrow">✈ YOUR UPCOMING TRIP</span>
+            <span class="plan-mode-badge">{{ session['current_trip']['travel_mode'] }}</span>
+          </div>
+
+          <div class="plan-destination-block">
+            <div class="plan-dest-info">
+              <span class="plan-dest-label">Destination</span>
+              <h2 class="plan-destination-title">📍 {{ session['current_trip']['destination']|title }}</h2>
+              <p class="plan-dates">🗓 {{ session['current_trip']['start_date'] }} → {{ session['current_trip']['end_date'] }}</p>
+            </div>
+            <div class="plan-dest-accent" aria-hidden="true">
+              <span>🧳</span>
+            </div>
+          </div>
+
+          <div class="plan-divider"></div>
+
+          <div class="plan-specs-grid">
+            <div class="plan-spec-item">
+              <span class="spec-label">Travel Style</span>
+              <strong class="spec-value">{{ session['current_trip']['trip_type'] or session['current_trip']['travel_mode'] }}</strong>
+            </div>
+            <div class="plan-spec-item">
+              <span class="spec-label">Bag Allowance</span>
+              <strong class="spec-value">{{ session['current_trip']['bag_type'] }} ({{ session['current_trip']['weight_limit'] }} kg)</strong>
+            </div>
+          </div>
+
+          {% if session.get('current_packing_list') %}
+            <div class="plan-progress-block">
+              <div class="progress-info">
+                <span class="progress-title">Packing Prepared</span>
+                <span class="progress-count">{{ session['current_packing_list']['items']|length }} items</span>
+              </div>
+              <div class="progress-bar-track">
+                <div class="progress-bar-fill" style="width: 100%;"></div>
+              </div>
+              <p class="progress-subtext">Estimated weight: {{ session['current_packing_list']['total_weight'] }} kg</p>
+            </div>
+          {% endif %}
+
+          <div class="plan-card-action">
+            <a href="{{ url_for('dashboard') }}" class="primary-btn plan-cta-btn">
+              View Packing List <span>→</span>
+            </a>
+          </div>
+
+        {% else %}
+          <!-- Inviting Empty / Preview State -->
+          <div class="plan-card-header">
+            <span class="plan-card-eyebrow">✈ YOUR TRIP PREVIEW</span>
+            <span class="plan-mode-badge">Get Ready</span>
+          </div>
+
+          <div class="plan-destination-block">
+            <div class="plan-dest-info">
+              <span class="plan-dest-label">Where to next?</span>
+              <h2 class="plan-destination-title">Ready for your next trip?</h2>
+              <p class="plan-preview-desc">
+                Plan your journey and we'll help you build a personalized, weight-checked packing list.
+              </p>
+            </div>
+            <div class="plan-dest-accent" aria-hidden="true">
+              <span>✈️</span>
+            </div>
+          </div>
+
+          <div class="plan-divider"></div>
+
+          <div class="plan-preview-highlights">
+            <div class="preview-item">
+              <span class="preview-icon">📍</span>
+              <div class="preview-text">
+                <strong>Smart Destinations</strong>
+                <small>Tailored to your climate & activities</small>
+              </div>
+            </div>
+            <div class="preview-item">
+              <span class="preview-icon">🧳</span>
+              <div class="preview-text">
+                <strong>Bag Weight Limits</strong>
+                <small>Stay under airline & transport fees</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="plan-card-action">
+            {% if session.get('user_id') %}
+              <a href="{{ url_for('trip_setup') }}" class="primary-btn plan-cta-btn">
+                Plan My Trip <span>→</span>
+              </a>
+            {% else %}
+              <a href="{{ url_for('signup') }}" class="primary-btn plan-cta-btn">
+                Plan My Trip <span>→</span>
+              </a>
+            {% endif %}
+          </div>
+        {% endif %}
+      </aside>
+    </section>
+  </div>
+
+  <!-- How It Works Section -->
+  <section class="home-section">
+    <p class="eyebrow">HOW IT WORKS</p>
+    <h2>Everything you need, nothing invented.</h2>
+    <p>Make a few clear choices, then use a categorized list to prepare with confidence.</p>
+    <div class="feature-grid">
+      <article class="feature-card">
+        <p class="feature-index">01</p>
+        <h3>Plan the trip</h3>
+        <p>Add your destination, dates, travel mode and planned activities.</p>
+      </article>
+      <article class="feature-card">
+        <p class="feature-index">02</p>
+        <h3>Choose preferences</h3>
+        <p>See optional personal items that match your chosen profile, while common essentials stay in every list.</p>
+      </article>
+      <article class="feature-card">
+        <p class="feature-index">03</p>
+        <h3>Check your bag</h3>
+        <p>Review categories, mark items packed and compare the estimated weight with your limit.</p>
+      </article>
+    </div>
+  </section>
+</main>
+
+</body>
+</html>
+
