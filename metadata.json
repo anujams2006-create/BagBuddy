@@ -1,0 +1,7 @@
+{
+  "name": "BagBuddy",
+  "description": "Personalized travel packing assistant and luggage weight checker for vacations, road trips, and hostel shifting.",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

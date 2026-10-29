@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/packingEngine.ts","./src/storage.ts","./src/types.ts","./src/components/Auth.tsx","./src/components/ChatAssistant.tsx","./src/components/Dashboard.tsx","./src/components/Header.tsx","./src/components/Home.tsx","./src/components/MyTrips.tsx","./src/components/TripSetup.tsx"],"version":"5.9.3"}
