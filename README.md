@@ -1,21 +1,41 @@
-# BagBuddy 🎒
+# BagBuddy
 
-> **Pack smarter. Travel lighter.**
-> Your personalized travel packing assistant and luggage weight checker for vacations, family trips, road trips, and hostel shifting.
+BagBuddy is a React, TypeScript, and Vite travel-packing app. Supabase Auth and
+Postgres are the only supported persistence layer; the local development server
+is the TypeScript Express server in `server.ts`.
 
-## Overview
-BagBuddy is a React application built with TypeScript and Vite. It generates personalized, categorized packing checklists tailored to your destination, travel duration, transport mode, travel profile, planned activities, and luggage limits. It keeps your luggage within weight limits before you leave home.
+## Local setup
 
-## Features
-- **Smart Trip Planning**: 6-step guided wizard for destination, dates, travel mode (Flight, Train, Bus, Car, Hostel), trip type, profile (Female, Male, Other), travelers & children count, activities, bag type, and bag weight limits.
-- **Dynamic Packing Engine**: Calculates exact clothes quantities, toiletries, accessories, electronics, documents, activity-specific gear, and hostel shift necessities based on duration and traveler profiles.
-- **Weight Limit Tracking & Overload Warnings**: Real-time comparison of estimated baggage weight versus airline or transport baggage allowances with recommendations for items to leave behind when overloaded.
-- **Interactive Packing Checklist**: Progress tracking with percentage indicator, item check-off with strikethrough styling, custom item additions, and removal options.
-- **Itinerary Management**: Save multiple trips, view past and upcoming checklists, and manage itineraries.
-- **Account & Session Management**: Sign up, log in, demo account switcher, and persistent local storage.
+1. Create a Supabase project and apply `supabase/migrations/202611010001_initial_bagbuddy.sql` through the SQL Editor or Supabase CLI.
+2. In Supabase Auth, enable Email/Password. Configure Site URL and redirect URLs for your local and Vercel URLs if email confirmation is enabled.
+3. Copy `.env.example` to `.env` and supply the project URL, publishable key, and optional Gemini key. Do not commit `.env`.
+4. Run `npm install`, then `npm run dev`.
 
-## Tech Stack
-- **Framework**: React 18 with TypeScript
-- **Build Tool**: Vite
-- **Styling**: Tailored CSS with DM Sans typography and responsive design
-- **State & Storage**: Client-side localStorage persistence
+The browser receives only `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`.
+They are public client configuration, not secrets. All app-data access is enforced
+by the migration's Row Level Security policies. `GEMINI_API_KEY` remains server-only.
+BagBuddy does not use or require a Supabase service-role key.
+
+## Vercel
+
+Vercel builds the SPA with `npm run build` and invokes the Express app through
+`api/chat.ts` and `api/weather.ts`; the existing `server.ts` does not start a
+long-running listener when `VERCEL` is set. Add these environment variables in
+Vercel Project Settings for the appropriate environments:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
+- `GEMINI_API_KEY` (only if AI responses are desired)
+
+Set the Supabase Auth Site URL to the production Vercel URL and add preview/local
+URLs as Redirect URLs. Deploying or configuring a remote Supabase/Vercel project
+is a manual step; this repository does not contain credentials.
+
+## Verification
+
+`npm run build` runs TypeScript checking and builds the production Vite bundle.
+For security verification, use two test accounts and confirm that account B cannot
+read or mutate account A's trips or packing items through the Supabase dashboard
+or direct API requests. The RLS policies enforce ownership through `trips.user_id`.

@@ -1,17 +1,53 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, FunctionDeclaration, Type } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+const authClient = supabaseUrl && supabasePublishableKey
+  ? createClient(supabaseUrl, supabasePublishableKey, { auth: { persistSession: false, autoRefreshToken: false } })
+  : null;
 
 app.use(cors());
 app.use(express.json());
+
+async function requireAuthenticatedUser(req: express.Request, res: express.Response): Promise<string | null> {
+  if (!authClient) {
+    res.status(503).json({ error: 'Supabase server authentication is not configured.' });
+    return null;
+  }
+  const bearer = req.header('authorization');
+  const token = bearer?.startsWith('Bearer ') ? bearer.slice('Bearer '.length) : null;
+  if (!token) {
+    res.status(401).json({ error: 'Authentication is required.' });
+    return null;
+  }
+  const { data, error } = await authClient.auth.getUser(token);
+  if (error || !data.user) {
+    res.status(401).json({ error: 'Your session is invalid or has expired.' });
+    return null;
+  }
+  return data.user.id;
+}
+
+async function ownsTrip(accessToken: string, tripId: string, userId: string): Promise<boolean> {
+  if (!authClient) return false;
+  const userClient = createClient(supabaseUrl!, supabasePublishableKey!, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+  });
+  const { data, error } = await userClient.from('trips').select('id, user_id').eq('id', tripId).single();
+  return !error && data?.user_id === userId;
+}
 
 // Initialize Google GenAI if key is present
 const apiKey = process.env.GEMINI_API_KEY;
@@ -244,7 +280,18 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any) {
 // Chat API endpoint
 app.post('/api/chat', async (req, res) => {
   try {
+    const userId = await requireAuthenticatedUser(req, res);
+    if (!userId) return;
     const { message, tripContext, history } = req.body;
+
+    const requestedTripId = tripContext?.trip?.id;
+    if (requestedTripId) {
+      const accessToken = req.header('authorization')!.slice('Bearer '.length);
+      if (typeof requestedTripId !== 'string' || !(await ownsTrip(accessToken, requestedTripId, userId))) {
+        res.status(403).json({ error: 'You cannot use a trip that you do not own.' });
+        return;
+      }
+    }
 
     if (!message || typeof message !== 'string') {
       res.status(400).json({ error: 'Message is required' });
@@ -446,4 +493,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Vercel imports this Express app from api/*.ts. Local development remains a
+// long-running server started by `npm run dev`.
+if (!process.env.VERCEL) {
+  void startServer();
+}
+
+export default app;

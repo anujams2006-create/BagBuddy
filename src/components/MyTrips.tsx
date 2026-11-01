@@ -1,13 +1,12 @@
 import React from 'react';
-import { Trip, PackingListResult } from '../types';
-import { deleteTrip, setCurrentTrip, setCurrentPackingList } from '../storage';
-import { generatePackingList } from '../packingEngine';
+import { Trip } from '../types';
+import { deleteTrip } from '../lib/data';
 
 interface MyTripsProps {
   trips: Trip[];
-  onSelectTrip: (trip: Trip, list: PackingListResult) => void;
+  onSelectTrip: (trip: Trip) => Promise<void>;
   onNavigate: (view: 'setup') => void;
-  onRefreshTrips: () => void;
+  onRefreshTrips: () => Promise<void>;
 }
 
 export const MyTrips: React.FC<MyTripsProps> = ({
@@ -16,18 +15,15 @@ export const MyTrips: React.FC<MyTripsProps> = ({
   onNavigate,
   onRefreshTrips,
 }) => {
-  const handleViewChecklist = (trip: Trip) => {
-    const packingList = generatePackingList(trip);
-    setCurrentTrip(trip);
-    setCurrentPackingList(packingList);
-    onSelectTrip(trip, packingList);
+  const handleViewChecklist = async (trip: Trip) => {
+    await onSelectTrip(trip);
   };
 
-  const handleDelete = (trip: Trip) => {
+  const handleDelete = async (trip: Trip) => {
     if (window.confirm(`Are you sure you want to delete your trip to ${trip.destination}?`)) {
       if (trip.id) {
-        deleteTrip(trip.id);
-        onRefreshTrips();
+        await deleteTrip(trip.id);
+        await onRefreshTrips();
       }
     }
   };
@@ -72,14 +68,14 @@ export const MyTrips: React.FC<MyTripsProps> = ({
 
               <div className="trip-card-footer">
                 <button
-                  onClick={() => handleViewChecklist(t)}
+                  onClick={() => void handleViewChecklist(t)}
                   className="primary-btn"
                 >
                   View Checklist <span>→</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleDelete(t)}
+                  onClick={() => void handleDelete(t)}
                   className="delete-btn"
                   title="Delete this trip"
                 >

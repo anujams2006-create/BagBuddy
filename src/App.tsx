@@ -1,14 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { User, Trip, PackingListResult, PackingItem } from './types';
-import {
-  getCurrentUser,
-  getCurrentTrip,
-  getCurrentPackingList,
-  getTrips,
-  logout,
-  saveTrip,
-  setCurrentPackingList,
-} from './storage';
+import { createTrip, currentUser as getCurrentUser, listTrips, loadPackingList, syncPackingItems } from './lib/data';
+import { supabase, supabaseConfigured } from './lib/supabase';
 import { Header } from './components/Header';
 import { Home } from './components/Home';
 import { Dashboard } from './components/Dashboard';
@@ -22,49 +15,108 @@ export function App() {
   const [currentTrip, setCurrentTripState] = useState<Trip | null>(null);
   const [currentPackingList, setCurrentPackingListState] = useState<PackingListResult | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'home' | 'dashboard' | 'setup' | 'trips' | 'login' | 'signup'>('home');
+  const hydrationId = useRef(0);
+
+  async function refreshTrips(preferredTripId?: string) {
+    const requestId = ++hydrationId.current;
+    setIsLoading(true);
+    setRestoreError(null);
+
+    try {
+      const user = await getCurrentUser();
+      if (!user) {
+        if (requestId === hydrationId.current) {
+          setCurrentUser(null);
+          setTrips([]);
+          setCurrentTripState(null);
+          setCurrentPackingListState(null);
+          setActiveView('home');
+        }
+        return;
+      }
+
+      const nextTrips = await listTrips();
+      const selectedTrip = preferredTripId
+        ? nextTrips.find(trip => trip.id === preferredTripId) ?? nextTrips[0] ?? null
+        : nextTrips[0] ?? null;
+      const selectedList = selectedTrip ? await loadPackingList(selectedTrip) : null;
+
+      if (requestId !== hydrationId.current) return;
+      setCurrentUser(user);
+      setTrips(nextTrips);
+      setCurrentTripState(selectedTrip);
+      setCurrentPackingListState(selectedList);
+      setActiveView(selectedTrip ? 'dashboard' : 'setup');
+    } catch (error) {
+      if (requestId === hydrationId.current) {
+        console.error('Could not restore Supabase session:', error);
+        setRestoreError(error instanceof Error ? error.message : 'Could not load your travel plans.');
+      }
+    } finally {
+      if (requestId === hydrationId.current) setIsLoading(false);
+    }
+  }
 
   useEffect(() => {
-    setCurrentUser(getCurrentUser());
-    setCurrentTripState(getCurrentTrip());
-    setCurrentPackingListState(getCurrentPackingList());
-    setTrips(getTrips());
+    if (!supabaseConfigured()) {
+      setIsLoading(false);
+      return;
+    }
+    void refreshTrips();
+    const { data: subscription } = supabase().auth.onAuthStateChange(async (event, session) => {
+      if (event === 'INITIAL_SESSION') return;
+      if (!session) {
+        hydrationId.current += 1;
+        setCurrentUser(null);
+        setTrips([]);
+        setCurrentTripState(null);
+        setCurrentPackingListState(null);
+        setIsLoading(false);
+        setRestoreError(null);
+        setActiveView('home');
+        return;
+      }
+      await refreshTrips();
+    });
+    return () => {
+      hydrationId.current += 1;
+      subscription.subscription.unsubscribe();
+    };
   }, []);
 
-  const refreshTrips = () => {
-    setTrips(getTrips());
-    setCurrentTripState(getCurrentTrip());
-    setCurrentPackingListState(getCurrentPackingList());
+  const selectTrip = async (trip: Trip) => {
+    const list = await loadPackingList(trip);
+    setCurrentTripState(trip);
+    setCurrentPackingListState(list);
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await supabase().auth.signOut();
     setCurrentUser(null);
+    setTrips([]);
+    setCurrentTripState(null);
+    setCurrentPackingListState(null);
     setActiveView('home');
   };
 
   const handleAuthSuccess = (user: User) => {
-    setCurrentUser(user);
-    setActiveView('dashboard');
-    refreshTrips();
+    void user;
+    void refreshTrips();
   };
 
-  const handleTripCreated = (trip: Trip, list: PackingListResult) => {
-    setCurrentTripState(trip);
-    setCurrentPackingListState(list);
-    refreshTrips();
-    setActiveView('dashboard');
+  const handleTripCreated = async (trip: Trip, list: PackingListResult) => {
+    if (!currentUser) throw new Error('Please log in before saving a trip.');
+    const savedTrip = await createTrip(trip, list, currentUser.id);
+    await refreshTrips(savedTrip.id);
   };
 
-  const handleUpdatePackingList = (list: PackingListResult) => {
+  const handleUpdatePackingList = async (list: PackingListResult) => {
+    if (!currentTrip?.id) throw new Error('Select a trip before updating its packing list.');
     setCurrentPackingListState(list);
-    setCurrentPackingList(list);
-  };
-
-  const handleSelectTrip = (trip: Trip, list: PackingListResult) => {
-    setCurrentTripState(trip);
-    setCurrentPackingListState(list);
-    setActiveView('dashboard');
+    await syncPackingItems(currentTrip.id, list.items);
   };
 
   // Chat-triggered modifications to real packing list
@@ -105,8 +157,7 @@ export function App() {
       overloaded: isOverloaded,
     };
 
-    handleUpdatePackingList(updatedList);
-    saveTrip(currentTrip, updatedList);
+    void handleUpdatePackingList(updatedList);
   };
 
   const handleRemoveItemFromChat = (itemName: string): boolean => {
@@ -152,8 +203,7 @@ export function App() {
       overloaded: isOverloaded,
     };
 
-    handleUpdatePackingList(updatedList);
-    saveTrip(currentTrip, updatedList);
+    void handleUpdatePackingList(updatedList);
     return true;
   };
 
@@ -188,20 +238,35 @@ export function App() {
       items: updatedItems,
     };
 
-    handleUpdatePackingList(updatedList);
-    saveTrip(currentTrip, updatedList);
+    void handleUpdatePackingList(updatedList);
     return true;
   };
 
+  if (isLoading) {
+    return <div className="loading-state">Loading your travel plans…</div>;
+  }
+
+  if (restoreError) {
+    return (
+      <main className="loading-state">
+        <p>{restoreError}</p>
+        <button className="primary-btn" onClick={() => void refreshTrips()}>Try again</button>
+      </main>
+    );
+  }
+
   return (
     <div className="app-container">
+      {!supabaseConfigured() && (
+        <div className="loading-state">Configure Supabase to use BagBuddy. See .env.example.</div>
+      )}
       {/* Show header for all views except dedicated auth page */}
       {activeView !== 'login' && activeView !== 'signup' && (
         <Header
           currentUser={currentUser}
           activeView={activeView}
           setActiveView={setActiveView}
-          onLogout={handleLogout}
+          onLogout={() => void handleLogout()}
         />
       )}
 
@@ -220,7 +285,7 @@ export function App() {
           currentTrip={currentTrip}
           currentPackingList={currentPackingList}
           onNavigate={view => setActiveView(view)}
-          onUpdatePackingList={handleUpdatePackingList}
+          onUpdatePackingList={list => void handleUpdatePackingList(list)}
         />
       )}
 
@@ -234,7 +299,10 @@ export function App() {
       {activeView === 'trips' && (
         <MyTrips
           trips={trips}
-          onSelectTrip={handleSelectTrip}
+          onSelectTrip={async (trip) => {
+            await selectTrip(trip);
+            setActiveView('dashboard');
+          }}
           onNavigate={view => setActiveView(view)}
           onRefreshTrips={refreshTrips}
         />
