@@ -127,6 +127,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         } catch {
           // A failed refresh must not lose the assistant's reply.
         }
+      } else if (data.engine === 'fallback') {
+        // Honest signal that the full AI is unavailable (e.g. missing API
+        // key) and this reply came from the basic intent matcher.
+        actionNote = 'Basic mode — full AI unavailable';
       }
 
       const assistantMsg: Message = {

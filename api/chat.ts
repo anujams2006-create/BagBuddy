@@ -539,7 +539,7 @@ const chatToolDeclarations = [
 // Gemini conversation with server-side tool execution. The model chooses
 // tools; the server executes them against the user's own data and feeds the
 // results back, for up to 5 rounds.
-async function runGeminiToolChat(
+async function runGeminiToolChatImpl(
   aiClient: any,
   model: string,
   message: string,
@@ -557,7 +557,7 @@ CONTEXT
 RULES
 1. Fetch only what the question needs. Weather question -> get_trip_weather (get_trip_details only if dates/route matter). Packing or weight question -> get_packing_list. "What trips do I have" -> get_my_trips. Do not fetch unrelated data.
 2. Never invent trips, packing items, weather, or baggage allowances. Use only tool results. If a tool returns an error or empty data, say so plainly.
-3. Weather answers come ONLY from get_trip_weather. If forecast_days is empty (beyond the horizon, past trip, unresolved place), say a reliable forecast is not available for those dates yet. Clearly separate any general seasonal advice from the actual forecast.
+3. Weather answers come ONLY from get_trip_weather. Answer the user's actual question FIRST and conversationally - rain question: a clear yes/no plus the rain chances on the relevant days; jacket question: a clear yes/no citing the lowest temperatures; then add at most a line of supporting detail. Do NOT recite the whole day-by-day forecast unless the user asks for the full forecast. If forecast_days is empty (beyond the horizon, past trip, unresolved place), say a reliable forecast is not available for those dates yet. Clearly separate any general seasonal advice from the actual forecast.
 4. Baggage limits apply ONLY to plane legs. baggage_limit_kg null means NO limit applies (no flight, or the airline allowance was never provided) - never state or assume a limit then.
 5. Ambiguity: if a tool result has clarification_needed, ask ONE concise question using the candidates given. Do not guess.
 6. Removing an item is destructive: call remove_packing_item WITHOUT confirm first; it returns requires_confirmation. Then ask the user, and only call it again with confirm: true after they clearly agree in a later message. Never set confirm: true on your own initiative.
@@ -579,12 +579,21 @@ RULES
       contents,
       config: { systemInstruction: systemPrompt, tools: [{ functionDeclarations: chatToolDeclarations }] },
     });
-    const response = roundTimeoutMs > 0
-      ? await Promise.race([
-          call,
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gemini timeout')), roundTimeoutMs)),
-        ])
-      : await call;
+    let response: any;
+    try {
+      response = roundTimeoutMs > 0
+        ? await Promise.race([
+            call,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gemini timeout')), roundTimeoutMs)),
+          ])
+        : await call;
+    } catch (error) {
+      // A failure on the very first call usually means the model name is
+      // unavailable for this API key; the wrapper retries with the next
+      // candidate model in that case.
+      if (round === 0) (error as any).modelUnavailable = true;
+      throw error;
+    }
     const calls = response.functionCalls ?? [];
     if (!calls.length) {
       const text = typeof response.text === 'string' ? response.text.trim() : '';
@@ -612,35 +621,102 @@ RULES
   };
 }
 
-function chatFormatWeatherReply(w: Record<string, any>, fallbackDestination: string): string {
+// Tries each candidate model in order: if the first call fails (for example
+// because a configured model name does not exist for this API key), the next
+// model is tried before giving up to the deterministic fallback.
+async function runGeminiToolChat(
+  aiClient: any,
+  models: string[],
+  message: string,
+  history: { role: string; text: string }[],
+  ctx: ChatToolContext,
+  roundTimeoutMs: number
+): Promise<{ reply: string; dataChanged: boolean; engine: string }> {
+  let lastError: unknown = null;
+  for (const model of models) {
+    try {
+      const out = await runGeminiToolChatImpl(aiClient, model, message, history, ctx, roundTimeoutMs);
+      return { ...out, engine: 'gemini' };
+    } catch (error) {
+      lastError = error;
+      if (!(error as any)?.modelUnavailable) throw error;
+      console.warn(`Gemini model "${model}" unavailable; trying next candidate.`);
+    }
+  }
+  throw lastError ?? new Error('No Gemini model available.');
+}
+
+// Wrapper that tags fallback replies so the client can show when the full AI
+// is unavailable (basic mode) instead of silently sounding scripted.
+async function fallbackToolChat(
+  message: string,
+  ctx: ChatToolContext
+): Promise<{ reply: string; dataChanged: boolean; engine: string }> {
+  const out = await fallbackToolChatImpl(message, ctx);
+  return { ...out, engine: 'fallback' };
+}
+
+// Question-aware weather answers for the deterministic fallback. Everything
+// below is computed only from the real forecast payload — the wording adapts
+// to what was actually asked (rain? jacket? temperature?) instead of dumping
+// the raw day list.
+function chatAnswerWeatherQuestion(message: string, w: Record<string, any>, fallbackDestination: string): string {
+  const lower = message.toLowerCase();
   const dest = w.location?.name ?? fallbackDestination;
   const days: any[] = Array.isArray(w.forecast_days) ? w.forecast_days : [];
-  if (days.length) {
-    const lines = days.slice(0, 5).map((day: any) =>
-      `${day.date}: ${day.condition}, ${day.temperature_min}–${day.temperature_max}°C` +
-      (day.precipitation_probability_max != null ? `, rain chance ${Math.round(day.precipitation_probability_max)}%` : '')
-    ).join('; ');
-    const partial = w.weather_status === 'partial'
-      ? ' That covers only part of the trip — a forecast is not available yet for the remaining dates.'
-      : '';
-    const coldest = Math.min(...days.map((d: any) => Number(d.temperature_min)).filter(Number.isFinite));
-    const jacket = Number.isFinite(coldest) && coldest <= 10
-      ? ` Lows reach ${coldest}°C, so yes — pack a warm jacket.`
-      : Number.isFinite(coldest) && coldest <= 16
-        ? ` Lows reach ${coldest}°C, so a light jacket for evenings is sensible.`
-        : '';
-    return `Here's the Open-Meteo forecast for ${dest}: ${lines}.${partial}${jacket}`;
+  if (!days.length) {
+    if (w.weather_status === 'too_far_future') {
+      return `A reliable daily forecast isn't available yet for your trip to ${fallbackDestination} (${w.requested_start_date} to ${w.requested_end_date}). Open-Meteo currently forecasts up to ${w.horizon_end}, so check again closer to departure — I won't guess temperatures or rain in the meantime.`;
+    }
+    if (w.weather_status === 'past') {
+      return `That trip to ${fallbackDestination} has already taken place, so there's no forecast to check for it.`;
+    }
+    if (w.weather_status === 'location_not_found') {
+      return `I couldn't match "${fallbackDestination}" to a real place, so I can't show weather for this trip. Editing the trip and picking the destination from the suggestions will fix it.`;
+    }
+    return `I don't have forecast data for ${fallbackDestination} for those dates, so I can't give you accurate temperatures or rain chances. The weather card on your dashboard shows the forecast as soon as it's available.`;
   }
-  if (w.weather_status === 'too_far_future') {
-    return `A reliable daily forecast isn't available yet for your trip to ${fallbackDestination} (${w.requested_start_date} to ${w.requested_end_date}). Open-Meteo currently forecasts up to ${w.horizon_end}, so check again closer to departure — I won't guess temperatures in the meantime.`;
+  const partialNote = w.weather_status === 'partial'
+    ? ' (That only covers the first part of your trip — the remaining dates are still beyond the forecast horizon.)'
+    : '';
+  const range = `${w.requested_start_date} to ${w.requested_end_date}`;
+  const minTemp = Math.min(...days.map((d: any) => Number(d.temperature_min)).filter(Number.isFinite));
+  const maxTemp = Math.max(...days.map((d: any) => Number(d.temperature_max)).filter(Number.isFinite));
+  const pops = days.map((d: any) => d.precipitation_probability_max).filter((v: any) => typeof v === 'number') as number[];
+  const maxPop = pops.length ? Math.max(...pops) : null;
+  const wettest = days.reduce((a: any, b: any) =>
+    (b.precipitation_probability_max ?? -1) > (a.precipitation_probability_max ?? -1) ? b : a, days[0]);
+
+  if (/rain|drizzle|shower|wet|umbrella|monsoon/.test(lower)) {
+    if (maxPop == null) {
+      return `The forecast for ${dest} (${range}) doesn't include rain chances, so I can't answer that reliably.${partialNote}`;
+    }
+    if (maxPop >= 60) {
+      return `Yes — rain is likely during your trip to ${dest}. The highest chance is ${Math.round(maxPop)}% on ${wettest.date} (${wettest.condition}). Pack an umbrella or a rain jacket.${partialNote}`;
+    }
+    if (maxPop >= 30) {
+      return `There's some chance of rain in ${dest}: up to ${Math.round(maxPop)}% on ${wettest.date} (${wettest.condition}), and lower on the other days. A compact umbrella is a sensible precaution.${partialNote}`;
+    }
+    return `Rain is unlikely in ${dest} during your trip — the highest rain chance on any day is only ${Math.round(maxPop)}%, and most days look dry. You can probably leave the umbrella behind.${partialNote}`;
   }
-  if (w.weather_status === 'past') {
-    return `That trip to ${fallbackDestination} has already taken place, so there's no forecast to check for it.`;
+  if (/jacket|coat|warm cloth|cold|chilly|freezing|sweater|hoodie|layer/.test(lower)) {
+    if (minTemp <= 8) {
+      return `Yes, definitely take a warm jacket for ${dest} — temperatures drop to ${minTemp}°C during your trip (${range}), even though days can reach ${maxTemp}°C.${partialNote}`;
+    }
+    if (minTemp <= 14) {
+      return `Yes, take a jacket for ${dest} — lows are around ${minTemp}°C, so mornings and evenings will feel chilly, even with days up to ${maxTemp}°C.${partialNote}`;
+    }
+    if (minTemp <= 19) {
+      return `A light jacket or an extra layer for the evenings should be enough for ${dest} — it only dips to about ${minTemp}°C, with days up to ${maxTemp}°C. No need for heavy winter wear.${partialNote}`;
+    }
+    return `You most likely won't need a jacket in ${dest} — even the coolest point of your trip is ${minTemp}°C, with days up to ${maxTemp}°C. Light clothing should be comfortable.${partialNote}`;
   }
-  if (w.weather_status === 'location_not_found') {
-    return `I couldn't match "${fallbackDestination}" to a real place, so I can't show weather for this trip. Editing the trip and picking the destination from the suggestions will fix it.`;
+  if (/temperature|how hot|how cold|degrees|warm will|weather/.test(lower)) {
+    const conditions = [...new Set(days.map((d: any) => String(d.condition).toLowerCase()))].slice(0, 3).join(', ');
+    return `For ${dest} during your trip (${range}): expect ${conditions}, with temperatures between ${minTemp}°C and ${maxTemp}°C${maxPop != null ? ` and rain chances up to ${Math.round(maxPop)}%` : ''}.${partialNote}`;
   }
-  return `I don't have forecast data for ${fallbackDestination} for those dates, so I can't give you accurate temperatures or rain chances. The weather card on your dashboard shows the forecast as soon as it's available.`;
+  const conditions = [...new Set(days.map((d: any) => String(d.condition).toLowerCase()))].slice(0, 3).join(', ');
+  return `Here's the forecast for ${dest} (${range}): ${conditions}, ${minTemp}°C to ${maxTemp}°C${maxPop != null ? `, rain chances up to ${Math.round(maxPop)}%` : ''}.${partialNote}`;
 }
 
 function chatGuessCategoryAndWeight(rawName: string): { category: string; weight: number } {
@@ -656,7 +732,7 @@ function chatGuessCategoryAndWeight(rawName: string): { category: string; weight
 // Deterministic fallback (no Gemini key, or Gemini error). It runs the SAME
 // validated tools, so its security properties are identical; it just matches
 // a smaller set of phrasings and asks for clarification more often.
-async function fallbackToolChat(
+async function fallbackToolChatImpl(
   message: string,
   ctx: ChatToolContext
 ): Promise<{ reply: string; dataChanged: boolean }> {
@@ -751,10 +827,10 @@ async function fallbackToolChat(
     return { reply: `Your packing list for ${out.result.trip_destination}: ${items.map(i => `${i.name} (×${i.quantity}, ${i.packed ? 'packed' : 'not packed'})`).join(', ')}. Total weight: ${out.result.total_weight_kg} kg.`, dataChanged: false };
   }
   // Weather.
-  if (lower.includes('weather') || lower.includes('rain') || lower.includes('temperature') || lower.includes('forecast') || lower.includes('jacket') || lower.includes('cold') || lower.includes('snow')) {
+  if (lower.includes('weather') || lower.includes('rain') || lower.includes('temperature') || lower.includes('forecast') || lower.includes('jacket') || lower.includes('cold') || lower.includes('snow') || lower.includes('umbrella')) {
     const out = await tool('get_trip_weather');
     if (out.result.error) return { reply: await surfaceError(out.result), dataChanged: false };
-    return { reply: chatFormatWeatherReply(out.result, String(out.result.trip_destination ?? 'your destination')), dataChanged: false };
+    return { reply: chatAnswerWeatherQuestion(message, out.result, String(out.result.trip_destination ?? 'your destination')), dataChanged: false };
   }
   // Bag weight / limit.
   if (lower.includes('weight') || lower.includes('heavy') || lower.includes('overload') || lower.includes('limit')) {
@@ -1135,8 +1211,8 @@ export default async function handler(req: Request, res: ServerResponse): Promis
     };
     if (ai) {
       try {
-        const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-        const out = await runGeminiToolChat(ai, model, message, history, ctx, 12000);
+        const models = [...new Set([process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite'].filter(Boolean))] as string[];
+        const out = await runGeminiToolChat(ai, models, message, history, ctx, 12000);
         sendJson(res, 200, out as Json);
         return;
       } catch (error) {
