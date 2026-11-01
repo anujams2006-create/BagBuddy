@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Trip, PackingListResult } from '../types';
 import { supabase } from '../lib/supabase';
-import { getTripWeather } from '../lib/weather';
 import { transportSummary, tripHasPlaneLeg } from '../lib/transport';
 
 interface Message {
@@ -15,9 +14,9 @@ interface Message {
 interface ChatAssistantProps {
   currentTrip: Trip | null;
   currentPackingList: PackingListResult | null;
-  onAddItem: (item: { name: string; category?: string; quantity?: number; weight?: number }) => void;
-  onRemoveItem: (itemName: string) => boolean;
-  onTogglePacked: (itemName: string, packed: boolean) => boolean;
+  // The assistant's writes happen on the server (validated tools running
+  // under the user's own session); the client only refreshes its state.
+  onDataChanged?: () => void | Promise<void>;
   onNavigate?: (view: 'setup' | 'dashboard' | 'trips') => void;
 }
 
@@ -31,9 +30,7 @@ const WELCOME_MESSAGE: Message = {
 export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   currentTrip,
   currentPackingList,
-  onAddItem,
-  onRemoveItem,
-  onTogglePacked,
+  onDataChanged,
   onNavigate,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -97,18 +94,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       const { data: { session } } = await supabase().auth.getSession();
       if (!session?.access_token) throw new Error('Please log in to use BagBuddy AI.');
 
-      // Best-effort: attach the same Open-Meteo weather the dashboard shows,
-      // so the assistant answers from real forecast data (or knows, and says,
-      // that no forecast is available yet). A weather failure never blocks chat.
-      let weather = null;
-      if (currentTrip) {
-        try {
-          weather = await getTripWeather(currentTrip);
-        } catch {
-          weather = null;
-        }
-      }
-
+      // Only the open trip's id is sent. The server verifies the session,
+      // re-checks trip ownership, and fetches exactly the data each question
+      // needs through its validated tools — the client never uploads the
+      // trip, packing list, or weather for the model to trust.
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -117,11 +106,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         },
         body: JSON.stringify({
           message: userText.trim(),
-          tripContext: {
-            trip: currentTrip,
-            packingList: currentPackingList,
-            weather,
-          },
+          activeTripId: currentTrip?.id ?? null,
           history: nextMessages.map(m => ({ role: m.role, content: m.content })),
         }),
       });
@@ -133,25 +118,14 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       const data = await response.json();
       let actionNote: string | undefined;
 
-      // Handle backend action response
-      if (data.action) {
-        const { type, payload } = data.action;
-        if (type === 'add_item' && payload?.item_name) {
-          onAddItem({
-            name: payload.item_name,
-            category: payload.category || 'Other Essentials',
-            quantity: payload.quantity || 1,
-            weight: payload.weight || 0.25,
-          });
-          actionNote = `Added "${payload.item_name}" to ${payload.category || 'your list'}`;
-        } else if (type === 'remove_item' && payload?.item_name) {
-          const removed = onRemoveItem(payload.item_name);
-          actionNote = removed
-            ? `Removed "${payload.item_name}"`
-            : `Could not find "${payload.item_name}" in your list`;
-        } else if (type === 'toggle_packed' && payload?.item_name) {
-          onTogglePacked(payload.item_name, payload.packed !== false);
-          actionNote = `Marked "${payload.item_name}" as ${payload.packed !== false ? 'packed' : 'unpacked'}`;
+      // Writes were executed server-side; refresh from the database so the
+      // UI shows the source of truth.
+      if (data.dataChanged) {
+        actionNote = 'Saved to your BagBuddy account';
+        try {
+          await onDataChanged?.();
+        } catch {
+          // A failed refresh must not lose the assistant's reply.
         }
       }
 

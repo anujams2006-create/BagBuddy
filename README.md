@@ -81,3 +81,33 @@ is a manual step; this repository does not contain credentials.
 For security verification, use two test accounts and confirm that account B cannot
 read or mutate account A's trips or packing items through the Supabase dashboard
 or direct API requests. The RLS policies enforce ownership through `trips.user_id`.
+
+## AI assistant security model
+
+The BagBuddy AI chat (`/api/chat`, implemented in `server.ts` for local dev
+and `api/chat.ts` on Vercel — the two share an identical tool layer) never
+gives the model database access. The model can only call a small set of
+server-side tools: `get_my_trips`, `get_trip_details`, `get_packing_list`,
+`get_trip_weather`, `add_packing_item`, `update_packing_item`,
+`remove_packing_item`, and `update_trip_details`.
+
+- Every request is authenticated with the caller's Supabase session token;
+  the user id comes only from that verified session — never from the request
+  body or from model arguments.
+- All database work runs through a client built from the caller's own token,
+  so Postgres RLS applies, and every query is additionally scoped by user id.
+  Trips and items are re-checked for ownership before any read or write; a
+  trip the caller does not own is indistinguishable from one that does not
+  exist.
+- Tool arguments are validated on the server (names, quantities, weights,
+  ISO dates, UUIDs). No service-role key exists in this project, and the
+  model can never run SQL.
+- Removing a packing item is destructive and two-step: the tool refuses
+  without `confirm: true`, which the assistant may only send after the user
+  explicitly agrees in the conversation.
+- The browser sends only the open trip's id (an untrusted hint that the
+  server re-verifies). After a server-side write it refreshes its state from
+  the database.
+- Weather answers come only from the `get_trip_weather` tool, which reuses
+  the same Open-Meteo implementation as `/api/weather`; baggage limits are
+  only ever read from plane legs and are never invented.

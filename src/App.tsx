@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { User, Trip, PackingListResult, PackingItem } from './types';
-import { createTrip, currentUser as getCurrentUser, listTrips, loadPackingList, packingListFromItems, syncPackingItems } from './lib/data';
+import { User, Trip, PackingListResult } from './types';
+import { createTrip, currentUser as getCurrentUser, listTrips, loadPackingList, syncPackingItems } from './lib/data';
 import { supabase, supabaseConfigured } from './lib/supabase';
 import { Header } from './components/Header';
 import { Home } from './components/Home';
@@ -119,52 +119,6 @@ export function App() {
     await syncPackingItems(currentTrip.id, list.items);
   };
 
-  // Chat-triggered modifications to real packing list
-  const handleAddItemFromChat = (item: { name: string; category?: string; quantity?: number; weight?: number }) => {
-    if (!currentTrip || !currentPackingList) return;
-    const categoryKey = item.category || 'Other Essentials';
-    const qty = item.quantity || 1;
-    const unitWeight = item.weight !== undefined ? item.weight : 0.25;
-
-    const newItem: PackingItem = {
-      id: `chat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      name: item.name,
-      quantity: qty,
-      weight: Number((qty * unitWeight).toFixed(2)),
-      category: categoryKey,
-      packed: false,
-    };
-
-    void handleUpdatePackingList(packingListFromItems(currentTrip, [...currentPackingList.items, newItem]));
-  };
-
-  const handleRemoveItemFromChat = (itemName: string): boolean => {
-    if (!currentTrip || !currentPackingList) return false;
-    const search = itemName.trim().toLowerCase();
-    const index = currentPackingList.items.findIndex(
-      item => item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase())
-    );
-    if (index === -1) return false;
-    const updatedItems = currentPackingList.items.filter((_, i) => i !== index);
-    void handleUpdatePackingList(packingListFromItems(currentTrip, updatedItems));
-    return true;
-  };
-
-  const handleTogglePackedFromChat = (itemName: string, packed: boolean): boolean => {
-    if (!currentTrip || !currentPackingList) return false;
-    const search = itemName.trim().toLowerCase();
-    let updated = false;
-    const updatedItems = currentPackingList.items.map(item => {
-      if (!updated && (item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase()))) {
-        updated = true;
-        return { ...item, packed };
-      }
-      return item;
-    });
-    if (!updated) return false;
-    void handleUpdatePackingList(packingListFromItems(currentTrip, updatedItems));
-    return true;
-  };
 
   if (isLoading) {
     return <div className="loading-state">Loading your travel plans…</div>;
@@ -245,9 +199,7 @@ export function App() {
       <ChatAssistant
         currentTrip={currentTrip}
         currentPackingList={currentPackingList}
-        onAddItem={handleAddItemFromChat}
-        onRemoveItem={handleRemoveItemFromChat}
-        onTogglePacked={handleTogglePackedFromChat}
+        onDataChanged={() => refreshTrips(currentTrip?.id)}
         onNavigate={view => setActiveView(view)}
       />
     </div>
