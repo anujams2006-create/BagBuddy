@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { Trip, PackingListResult } from '../types';
 import { generatePackingList } from '../packingEngine';
-import { saveTrip } from '../storage';
 
 interface TripSetupProps {
-  onTripCreated: (trip: Trip, list: PackingListResult) => void;
+  onTripCreated: (trip: Trip, list: PackingListResult) => Promise<void>;
   onCancel?: () => void;
 }
 
@@ -116,7 +115,7 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
 
@@ -169,12 +168,13 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
     };
 
     const packingList = generatePackingList(tripData);
-    const saved = saveTrip(tripData, packingList);
-
-    setTimeout(() => {
+    try {
+      await onTripCreated(tripData, packingList);
       setIsSubmitting(false);
-      onTripCreated(saved, packingList);
-    }, 200);
+    } catch (error: unknown) {
+      setIsSubmitting(false);
+      setErrors({ submit: error instanceof Error ? error.message : 'Could not save your trip.' });
+    }
   };
 
   return (
@@ -186,6 +186,7 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
       </header>
 
       <form onSubmit={handleSubmit} noValidate>
+        {errors.submit && <p className="field-error">{errors.submit}</p>}
         {/* Section 01: Destination & Dates */}
         <section className="trip-section">
           <div className="section-heading">

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
-import { login, signup } from '../storage';
+import { currentUser } from '../lib/data';
+import { supabase } from '../lib/supabase';
 
 interface AuthProps {
   mode: 'login' | 'signup';
@@ -21,34 +22,33 @@ export const Auth: React.FC<AuthProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
 
-    if (mode === 'signup') {
-      const res = signup(name, email, password);
-      if (res.success && res.user) {
-        setSuccess('Account created successfully!');
-        setTimeout(() => onSuccess(res.user!), 400);
+    try {
+      if (mode === 'signup') {
+        const { data, error: signUpError } = await supabase().auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { name: name.trim() } },
+        });
+        if (signUpError) throw signUpError;
+        if (!data.session) {
+          setSuccess('Account created. Check your email to confirm your account, then log in.');
+          return;
+        }
       } else {
-        setError(res.error || 'Could not create account.');
+        const { error: signInError } = await supabase().auth.signInWithPassword({ email: email.trim(), password });
+        if (signInError) throw signInError;
       }
-    } else {
-      const res = login(email, password);
-      if (res.success && res.user) {
-        setSuccess(`Welcome back, ${res.user.name}!`);
-        setTimeout(() => onSuccess(res.user!), 400);
-      } else {
-        setError(res.error || 'Invalid email or password.');
-      }
-    }
-  };
-
-  const handleUseDemo = () => {
-    const res = login('anuja@bagbuddy.app', 'password123');
-    if (res.success && res.user) {
-      onSuccess(res.user);
+      const user = await currentUser();
+      if (!user) throw new Error('Your session could not be restored. Please try again.');
+      setSuccess(mode === 'signup' ? 'Account created successfully!' : `Welcome back, ${user.name}!`);
+      onSuccess(user);
+    } catch (authError: unknown) {
+      setError(authError instanceof Error ? authError.message : 'Authentication failed. Please try again.');
     }
   };
 
@@ -176,27 +176,6 @@ export const Auth: React.FC<AuthProps> = ({
               {mode === 'login' ? 'Login' : 'Create Account'} <span>→</span>
             </button>
           </form>
-
-          {mode === 'login' && (
-            <div style={{ marginTop: '12px', textAlign: 'center' }}>
-              <button
-                type="button"
-                onClick={handleUseDemo}
-                style={{
-                  background: 'none',
-                  border: '1px dashed var(--border-strong)',
-                  borderRadius: '6px',
-                  padding: '6px 12px',
-                  fontSize: '0.82rem',
-                  color: 'var(--muted)',
-                  cursor: 'pointer',
-                  width: '100%',
-                }}
-              >
-                Sign in with demo account (anuja@bagbuddy.app)
-              </button>
-            </div>
-          )}
 
           <p className="auth-footer">
             {mode === 'login' ? (

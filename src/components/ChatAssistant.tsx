@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Trip, PackingListResult } from '../types';
+import { supabase } from '../lib/supabase';
 
 interface Message {
   id: string;
@@ -41,26 +42,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load chat history from localStorage for current trip
   useEffect(() => {
-    const tripKey = currentTrip?.id || 'general';
-    const saved = localStorage.getItem(`bagbuddy_chat_${tripKey}`);
-    if (saved) {
-      try {
-        setMessages(JSON.parse(saved));
-      } catch {
-        setMessages([WELCOME_MESSAGE]);
-      }
-    } else {
-      setMessages([WELCOME_MESSAGE]);
-    }
+    setMessages([WELCOME_MESSAGE]);
   }, [currentTrip?.id]);
 
-  // Persist chat history
   const updateMessages = (newMessages: Message[]) => {
     setMessages(newMessages);
-    const tripKey = currentTrip?.id || 'general';
-    localStorage.setItem(`bagbuddy_chat_${tripKey}`, JSON.stringify(newMessages));
   };
 
   const scrollToBottom = () => {
@@ -105,10 +92,13 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     }
 
     try {
+      const { data: { session } } = await supabase().auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in to use BagBuddy AI.');
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           message: userText.trim(),

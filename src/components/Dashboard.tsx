@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Trip, PackingListResult, User, PackingItem } from '../types';
-import { saveTrip } from '../storage';
 
 interface DashboardProps {
   currentUser: User | null;
@@ -81,7 +80,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
 
     onUpdatePackingList(updatedList);
-    saveTrip(currentTrip, updatedList);
   };
 
   const handleAddItem = (e: React.FormEvent) => {
@@ -121,7 +119,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
 
     onUpdatePackingList(updatedList);
-    saveTrip(currentTrip, updatedList);
     setNewItemName('');
     setShowAddModal(false);
   };
@@ -152,7 +149,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
 
     onUpdatePackingList(updatedList);
-    saveTrip(currentTrip, updatedList);
   };
 
   return (

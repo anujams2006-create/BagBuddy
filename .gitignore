@@ -30,3 +30,5 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+node_modules/
+dist/
