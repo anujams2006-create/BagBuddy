@@ -493,8 +493,8 @@ async function startServer() {
   });
 }
 
-// Vercel imports this Express app from api/*.ts. Local development remains a
-// long-running server started by `npm run dev`.
+// This is the local Express/Vite entrypoint. Vercel uses standalone handlers
+// in api/ and never imports this long-running server.
 if (!process.env.VERCEL) {
   void startServer();
 }
