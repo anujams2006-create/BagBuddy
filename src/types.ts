@@ -1,6 +1,15 @@
 export interface Trip {
   id?: string;
+  /** Human-readable display name of the selected place, e.g. "Panaji, Goa, India". */
   destination: string;
+  /**
+   * Coordinates of the place chosen from Open-Meteo Geocoding.
+   * Null/absent on legacy trips that were saved with a free-text destination only.
+   */
+  latitude?: number | null;
+  longitude?: number | null;
+  /** IANA timezone of the selected place, e.g. "Asia/Kolkata". Null on legacy trips. */
+  timezone?: string | null;
   start_date: string;
   end_date: string;
   travel_mode: string;

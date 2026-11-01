@@ -70,7 +70,7 @@ async function ownsTrip(token: string, tripId: string, userId: string): Promise<
   return !error && data?.user_id === userId;
 }
 
-function fallbackSmartResponse(message: string, trip: any, packingList: any): Json {
+function fallbackSmartResponse(message: string, trip: any, packingList: any, weather?: any): Json {
   const lower = message.toLowerCase().trim();
   const cleaned = lower
     .replace(/\s+to\s+(?:my\s+|the\s+)?(?:packing\s+)?(?:checklist|list|bag)$/i, '')
@@ -113,7 +113,19 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any): Js
     return { reply: 'Your bag weighs ' + packingList.total_weight + ' kg out of ' + packingList.weight_limit + ' kg. You have ' + packingList.remaining_weight + ' kg remaining.' };
   }
   if (lower.includes('weather') || lower.includes('rain') || lower.includes('temperature') || lower.includes('forecast') || lower.includes('jacket')) {
-    return { reply: 'For ' + (trip?.destination ?? 'your destination') + ', pack breathable layers and light rain protection. Check the live forecast shortly before departure.' };
+    const dest = trip?.destination ?? 'your destination';
+    if (weather?.days?.length) {
+      const lines = weather.days.slice(0, 5).map((day: any) => day.date + ': ' + day.condition + ', ' + day.temperature_min + '–' + day.temperature_max + '°C' + (day.precipitation_probability_max != null ? ', rain chance ' + Math.round(day.precipitation_probability_max) + '%' : '')).join('; ');
+      const partialNote = weather.status === 'partial' ? ' That covers only part of your trip — a forecast is not available yet for the remaining dates.' : '';
+      return { reply: 'Here\'s the Open-Meteo forecast for ' + (weather.location?.name ?? dest) + ': ' + lines + '.' + partialNote };
+    }
+    if (weather?.status === 'too_far_future') {
+      return { reply: 'A reliable daily forecast isn\'t available yet for your trip to ' + dest + ' (' + trip?.start_date + ' to ' + trip?.end_date + '). Open-Meteo currently forecasts up to ' + weather.horizon_end + ', so check again closer to departure — I won\'t guess temperatures in the meantime.' };
+    }
+    if (weather?.status === 'past') {
+      return { reply: 'That trip to ' + dest + ' has already taken place, so there\'s no forecast to check for it.' };
+    }
+    return { reply: 'I don\'t have forecast data for ' + dest + ' for those dates, so I can\'t give you accurate temperatures or rain chances. The weather card on your dashboard shows the forecast as soon as it\'s available.' };
   }
   if (lower.includes('missing') || lower.includes('forget') || lower.includes('forgotten') || lower.includes('what am i missing')) {
     if (!trip) return { reply: 'Select or plan a trip first and I can help check what you may be missing.' };
@@ -153,7 +165,7 @@ export default async function handler(req: Request, res: ServerResponse): Promis
       sendJson(res, 400, { error: 'Message is required.' });
       return;
     }
-    const tripContext = body.tripContext as { trip?: any; packingList?: any } | undefined;
+    const tripContext = body.tripContext as { trip?: any; packingList?: any; weather?: any } | undefined;
     const requestedTripId = tripContext?.trip?.id;
     if (requestedTripId && (typeof requestedTripId !== 'string' || !(await ownsTrip(token, requestedTripId, userId)))) {
       sendJson(res, 403, { error: 'You cannot use a trip that you do not own.' });
@@ -161,6 +173,7 @@ export default async function handler(req: Request, res: ServerResponse): Promis
     }
     const trip = tripContext?.trip ?? null;
     const packingList = tripContext?.packingList ?? null;
+    const weather = tripContext?.weather ?? null;
     if (ai) {
       try {
         const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
@@ -170,17 +183,24 @@ export default async function handler(req: Request, res: ServerResponse): Promis
         }));
         contents.push({ role: 'user', parts: [{ text: message.trim() }] });
         const tripSummary = trip ? JSON.stringify({
-          destination: trip.destination, start_date: trip.start_date, end_date: trip.end_date,
+          destination: trip.destination, latitude: trip.latitude ?? null, longitude: trip.longitude ?? null, timezone: trip.timezone ?? null,
+          start_date: trip.start_date, end_date: trip.end_date,
           travel_mode: trip.travel_mode, activities: trip.activities, weight_limit_kg: trip.weight_limit,
           total_weight_kg: packingList?.total_weight, remaining_weight_kg: packingList?.remaining_weight,
           overloaded: packingList?.overloaded,
           items_summary: packingList?.items?.slice(0, 40).map((item: any) => item.name + ' (' + item.weight + 'kg, ' + (item.packed ? 'packed' : 'unpacked') + ')'),
         }) : 'No active trip';
+        const weatherSummary = weather ? JSON.stringify({
+          status: weather.status, location: weather.location ?? null, timezone: weather.timezone ?? null,
+          horizon_end: weather.horizon_end,
+          forecast_days: Array.isArray(weather.days) ? weather.days : [],
+          notes: weather.notes ?? [],
+        }) : 'No weather data was provided for this trip.';
         const result = await Promise.race([
           ai.models.generateContent({
             model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
             contents,
-            config: { systemInstruction: 'You are BagBuddy AI Travel Assistant. Be friendly, practical, concise, and travel-and-packing focused. Current trip: ' + tripSummary + '. Use tools for add, remove, and packed-status requests. Never invent bookings or tickets.', tools: [{ functionDeclarations: [addPackingItemTool, removePackingItemTool, togglePackedStatusTool] }] },
+            config: { systemInstruction: 'You are BagBuddy AI Travel Assistant. Be friendly, practical, concise, and travel-and-packing focused. Current trip: ' + tripSummary + '. Weather data (Open-Meteo, for the trip coordinates and dates): ' + weatherSummary + '. For weather questions use ONLY that weather data: if forecast_days is empty, clearly say a reliable forecast is not available for the trip dates yet and do not invent temperatures, rain chances or conditions, and do not present current or typical weather as the trip-date forecast. Use tools for add, remove, and packed-status requests. Never invent bookings or tickets.', tools: [{ functionDeclarations: [addPackingItemTool, removePackingItemTool, togglePackedStatusTool] }] },
           }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gemini timeout')), 4500)),
         ]) as any;
@@ -204,7 +224,7 @@ export default async function handler(req: Request, res: ServerResponse): Promis
         console.warn('Gemini request failed; using fallback:', error instanceof Error ? error.message : error);
       }
     }
-    sendJson(res, 200, fallbackSmartResponse(message, trip, packingList));
+    sendJson(res, 200, fallbackSmartResponse(message, trip, packingList, weather));
   } catch (error) {
     console.error('Chat endpoint error:', error);
     sendJson(res, 500, { error: 'Failed to process chat message.', reply: 'I am having trouble connecting to the travel assistant right now. Please try again shortly.' });

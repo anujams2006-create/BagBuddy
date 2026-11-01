@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Trip, PackingListResult } from '../types';
 import { generatePackingList } from '../packingEngine';
+import { PlaceAutocomplete } from './PlaceAutocomplete';
+import type { PlaceResult } from '../lib/weather';
 
 interface TripSetupProps {
   onTripCreated: (trip: Trip, list: PackingListResult) => Promise<void>;
@@ -29,7 +31,9 @@ const TOILETRIES_OPTIONS = ['Toothbrush', 'Toothpaste', 'Soap', 'Shampoo', 'Deod
 
 export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
   // Form fields
-  const [destination, setDestination] = useState('');
+  // The destination is a real place picked from Open-Meteo suggestions; its
+  // display name, coordinates, and timezone are all saved with the trip.
+  const [selectedPlace, setSelectedPlace] = useState<PlaceResult | null>(null);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [travelMode, setTravelMode] = useState('Flight');
@@ -119,8 +123,8 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
     e.preventDefault();
     const newErrors: Record<string, string> = {};
 
-    if (!destination.trim()) {
-      newErrors.destination = 'Please provide destination.';
+    if (!selectedPlace) {
+      newErrors.destination = 'Please select a place from the suggestions so we can fetch accurate weather for it.';
     }
     if (!startDate) {
       newErrors.startDate = 'Please provide departure date.';
@@ -149,8 +153,14 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
     setErrors({});
     setIsSubmitting(true);
 
+    // Validation above guarantees a place was selected.
+    const place = selectedPlace as PlaceResult;
+
     const tripData: Trip = {
-      destination: destination.trim(),
+      destination: place.displayName,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      timezone: place.timezone ?? null,
       start_date: startDate,
       end_date: endDate,
       travel_mode: travelMode,
@@ -200,17 +210,12 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
           <div className="form-grid">
             <div className="form-group full-width destination-group">
               <label htmlFor="destination">Destination <b aria-hidden="true">*</b></label>
-              <div className="input-with-mark">
-                <span aria-hidden="true">⌖</span>
-                <input
-                  id="destination"
-                  type="text"
-                  placeholder="Goa, Mumbai, Paris…"
-                  value={destination}
-                  onChange={e => setDestination(e.target.value)}
-                  aria-invalid={!!errors.destination}
-                />
-              </div>
+              <PlaceAutocomplete
+                id="destination"
+                selectedPlace={selectedPlace}
+                onChange={setSelectedPlace}
+                hasError={!!errors.destination}
+              />
               <small className="field-error">{errors.destination}</small>
             </div>
 

@@ -701,6 +701,133 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 0.9rem;
 }
 
+/* Trip weather card (dashboard) */
+.weather-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px;
+  margin-top: 16px;
+}
+
+.weather-card h2 {
+  margin: 6px 0 0;
+  font-size: 1.5rem;
+}
+
+.weather-dates {
+  color: var(--muted);
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+}
+
+.weather-state {
+  color: var(--muted);
+  margin: 18px 0 0;
+}
+
+.weather-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 14px 0 0;
+}
+
+.weather-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.weather-day {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.weather-day-date {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.weather-day-condition {
+  font-size: 0.98rem;
+}
+
+.weather-day-temps {
+  font-weight: 700;
+}
+
+.weather-day-rain {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Place autocomplete (trip setup) */
+.place-autocomplete {
+  position: relative;
+}
+
+.place-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(41, 35, 31, 0.14);
+  max-height: 288px;
+  overflow-y: auto;
+}
+
+.place-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.place-option.active,
+.place-option[aria-selected="true"] {
+  background: var(--primary-soft);
+}
+
+.place-option-name {
+  font-weight: 700;
+}
+
+.place-option small {
+  color: var(--muted);
+}
+
+.place-status {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.place-selected-note {
+  color: var(--success);
+  font-size: 0.85rem;
+  margin: 2px 0 0;
+}
+
+.place-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 2px 0 0;
+}
+
 .packing-section {
   padding: 28px;
   margin-top: 20px;

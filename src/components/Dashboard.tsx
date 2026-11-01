@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Trip, PackingListResult, User, PackingItem } from '../types';
+import { WeatherCard } from './WeatherCard';
 
 interface DashboardProps {
   currentUser: User | null;
@@ -197,6 +198,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
       </section>
+
+      {/* Weather for the trip's location and dates */}
+      <WeatherCard trip={currentTrip} />
 
       {/* Weight Summary */}
       <section className="weight-summary" aria-label="Bag weight">

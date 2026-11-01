@@ -126,7 +126,7 @@ const togglePackedStatusTool: FunctionDeclaration = {
 };
 
 // Fallback intelligent intent parser for when API key is missing or offline
-function fallbackSmartResponse(message: string, trip: any, packingList: any) {
+function fallbackSmartResponse(message: string, trip: any, packingList: any, weather?: any) {
   const lower = message.toLowerCase().trim();
 
   // Strip trailing destination or list references
@@ -247,12 +247,33 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any) {
     };
   }
 
-  // 6. Weather advice
+  // 6. Weather advice — only from real Open-Meteo data passed in the context.
   if (lower.includes('weather') || lower.includes('rain') || lower.includes('temperature') || lower.includes('forecast') || lower.includes('jacket')) {
     const dest = trip?.destination || 'your destination';
-    const dates = trip?.start_date && trip?.end_date ? `from ${trip.start_date} to ${trip.end_date}` : 'during your travel dates';
+    if (weather?.days?.length) {
+      const lines = weather.days
+        .slice(0, 5)
+        .map((day: any) => `${day.date}: ${day.condition}, ${day.temperature_min}–${day.temperature_max}°C${day.precipitation_probability_max != null ? `, rain chance ${Math.round(day.precipitation_probability_max)}%` : ''}`)
+        .join('; ');
+      const partialNote = weather.status === 'partial'
+        ? ' That covers only part of your trip — a forecast is not available yet for the remaining dates.'
+        : '';
+      return {
+        reply: `Here's the Open-Meteo forecast for ${weather.location?.name || dest}: ${lines}.${partialNote} Want me to add anything weather-related, like an umbrella or a warmer layer?`,
+      };
+    }
+    if (weather?.status === 'too_far_future') {
+      return {
+        reply: `A reliable daily forecast isn't available yet for your trip to ${dest} (${trip?.start_date} to ${trip?.end_date}). Open-Meteo currently forecasts up to ${weather.horizon_end}, so check again closer to departure — I won't guess temperatures in the meantime.`,
+      };
+    }
+    if (weather?.status === 'past') {
+      return {
+        reply: `That trip to ${dest} has already taken place, so there's no forecast to check for it.`,
+      };
+    }
     return {
-      reply: `For ${dest} ${dates}, temperatures vary depending on the local season. Pack breathable base layers and at least one light warm jacket or rain shell. Would you like me to add an umbrella or light jacket to your checklist?`,
+      reply: `I don't have forecast data for ${dest} for those dates, so I can't give you accurate temperatures or rain chances. The weather card on your dashboard shows the forecast as soon as it's available.`,
     };
   }
 
@@ -300,6 +321,7 @@ app.post('/api/chat', async (req, res) => {
 
     const trip = tripContext?.trip || null;
     const packingList = tripContext?.packingList || null;
+    const weather = tripContext?.weather || null;
 
     // If Gemini client is initialized, call Gemini 3.8 Flash with tools
     if (ai) {
@@ -310,6 +332,9 @@ You use the existing orange-themed BagBuddy context.
 CURRENT ACTIVE TRIP CONTEXT:
 ${trip ? JSON.stringify({
   destination: trip.destination,
+  latitude: trip.latitude ?? null,
+  longitude: trip.longitude ?? null,
+  timezone: trip.timezone ?? null,
   start_date: trip.start_date,
   end_date: trip.end_date,
   travel_mode: trip.travel_mode,
@@ -329,13 +354,23 @@ ${trip ? JSON.stringify({
   items_summary: packingList?.items?.map((i: any) => `${i.name} (${i.weight}kg, ${i.packed ? 'packed' : 'unpacked'})`).slice(0, 40).join(', ')
 }, null, 2) : 'No trip currently active. Ask the user if they want general travel advice or want to plan a trip.'}
 
+WEATHER DATA (from Open-Meteo, fetched for the trip's coordinates and dates):
+${weather ? JSON.stringify({
+  status: weather.status,
+  location: weather.location ?? null,
+  timezone: weather.timezone ?? null,
+  horizon_end: weather.horizon_end,
+  forecast_days: Array.isArray(weather.days) ? weather.days : [],
+  notes: weather.notes ?? [],
+}, null, 2) : 'No weather data was provided for this trip.'}
+
 RULES:
 1. Be friendly, practical, concise by default, and accurate with numbers.
 2. If the user asks to add an item (e.g., "Add an umbrella", "Pack a rain jacket"), CALL the 'add_packing_item' tool. Confirm the action warmly with the estimated weight.
 3. If the user asks to remove an item (e.g., "Remove jeans", "Delete hairdryer"), CALL the 'remove_packing_item' tool.
 4. If the user asks to mark an item packed or unpacked, CALL the 'toggle_packed_status' tool.
 5. If the user asks about bag weight or overload, use the actual numbers from the trip context (${packingList?.total_weight || 0} kg out of ${packingList?.weight_limit || 7} kg limit).
-6. For weather inquiries, give practical recommendations based on typical climate for the destination and season, but be honest that real-time minute forecasts require checking right before departure.
+6. For weather inquiries, use ONLY the WEATHER DATA above. If it contains forecast_days, quote those dates, conditions, temperatures and rain chances. If forecast_days is empty (for example status "too_far_future", "past" or "location_not_found"), clearly say that a reliable forecast is not available for the trip dates yet and DO NOT invent temperatures, rain chances or conditions, and do not present current or "typical" weather as the trip-date forecast.
 7. Support multi-travel modes (Flight, Train, Bus, Car, Hostel).
 8. Never invent booking confirmations or airline tickets. Keep answers travel & packing focused.`;
 
@@ -445,7 +480,7 @@ RULES:
     }
 
     // Fallback response handler
-    const fallback = fallbackSmartResponse(message, trip, packingList);
+    const fallback = fallbackSmartResponse(message, trip, packingList, weather);
     res.json(fallback);
   } catch (error: any) {
     console.error('Chat endpoint error:', error);
@@ -456,20 +491,310 @@ RULES:
   }
 });
 
-// Weather API endpoint
-app.get('/api/weather', (req, res) => {
-  const destination = (req.query.destination as string) || '';
-  if (!destination) {
-    res.status(400).json({ error: 'Destination required' });
-    return;
+// ---------------------------------------------------------------------------
+// Weather: real date-specific forecasts from Open-Meteo (no API key needed).
+//
+// This logic is intentionally duplicated in `api/weather.ts`: Vercel
+// functions in this project are self-contained (see the "Fix Vercel API
+// function bundling" change), so the two copies must be kept in step.
+//
+// Behaviour:
+// - With latitude/longitude (a place the user selected), fetch the daily
+//   forecast for exactly the trip dates that fall inside Open-Meteo's
+//   forecast horizon (today .. today + 15 days, in the place's timezone).
+// - Trip dates beyond the horizon are reported honestly via the payload
+//   `status` ("too_far_future" / "partial") — never filled with invented or
+//   current weather.
+// - Without coordinates (a legacy trip saved with free-text destination),
+//   resolve the best geocoding match and flag the result `approximate`.
+// ---------------------------------------------------------------------------
+
+const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+const FORECAST_HORIZON_DAYS = 15;
+
+function weatherConditionForCode(code: number): string {
+  if (code === 0) return 'Clear sky';
+  if (code === 1) return 'Mainly clear';
+  if (code === 2) return 'Partly cloudy';
+  if (code === 3) return 'Overcast';
+  if (code === 45 || code === 48) return 'Fog';
+  if (code === 51 || code === 53 || code === 55) return 'Drizzle';
+  if (code === 56 || code === 57) return 'Freezing drizzle';
+  if (code === 61) return 'Light rain';
+  if (code === 63) return 'Rain';
+  if (code === 65) return 'Heavy rain';
+  if (code === 66 || code === 67) return 'Freezing rain';
+  if (code === 71) return 'Light snow';
+  if (code === 73) return 'Snow';
+  if (code === 75) return 'Heavy snow';
+  if (code === 77) return 'Snow grains';
+  if (code === 80) return 'Light rain showers';
+  if (code === 81) return 'Rain showers';
+  if (code === 82) return 'Violent rain showers';
+  if (code === 85 || code === 86) return 'Snow showers';
+  if (code === 95) return 'Thunderstorm';
+  if (code === 96 || code === 99) return 'Thunderstorm with hail';
+  return 'Mixed conditions';
+}
+
+function isIsoDateString(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
+
+function addDaysToIsoDate(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Today's date (yyyy-mm-dd) in the given IANA timezone, falling back to UTC. */
+function todayIsoInTimezone(timezone: string | null): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone || 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function parseCoordinate(value: string | null | undefined, min: number, max: number): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= min && parsed <= max ? parsed : null;
+}
+
+interface TripWeatherOutcome {
+  httpStatus: number;
+  payload: Record<string, unknown>;
+}
+
+async function getTripWeather(params: {
+  latitude?: string | null;
+  longitude?: string | null;
+  timezone?: string | null;
+  locationName?: string | null;
+  destination?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}): Promise<TripWeatherOutcome> {
+  const startDate = params.startDate ?? '';
+  const endDate = params.endDate ?? '';
+  if (!isIsoDateString(startDate) || !isIsoDateString(endDate)) {
+    return { httpStatus: 400, payload: { error: 'start_date and end_date are required in YYYY-MM-DD format.' } };
+  }
+  if (endDate < startDate) {
+    return { httpStatus: 400, payload: { error: 'end_date must be on or after start_date.' } };
   }
 
-  // Provide realistic seasonal climate data for destinations
-  res.json({
-    destination,
-    summary: `Typical seasonal weather for ${destination} features moderate temperatures with occasional light showers. Carry breathable layers and light rain protection.`,
-    recommendedGear: ['Lightweight umbrella', 'Comfortable walking shoes', 'Breathable jacket'],
+  let latitude = parseCoordinate(params.latitude, -90, 90);
+  let longitude = parseCoordinate(params.longitude, -180, 180);
+  if ((latitude === null) !== (longitude === null)) {
+    return { httpStatus: 400, payload: { error: 'latitude and longitude must be provided together and in range.' } };
+  }
+  if (params.latitude && latitude === null) {
+    return { httpStatus: 400, payload: { error: 'latitude is out of range.' } };
+  }
+  if (params.longitude && longitude === null) {
+    return { httpStatus: 400, payload: { error: 'longitude is out of range.' } };
+  }
+
+  let timezone = params.timezone?.trim() || null;
+  let locationName = params.locationName?.trim() || '';
+  let approximate = false;
+
+  if (latitude === null || longitude === null) {
+    // Legacy trip: only a free-text destination was stored. Resolve the best
+    // geocoding match so the trip still gets weather, clearly labelled.
+    const destination = (params.destination ?? '').trim();
+    if (!destination) {
+      return { httpStatus: 400, payload: { error: 'Provide latitude and longitude, or a destination to resolve.' } };
+    }
+    let place: any = null;
+    try {
+      const geoResponse = await fetch(
+        `${OPEN_METEO_GEOCODING_URL}?name=${encodeURIComponent(destination)}&count=10&language=en&format=json`
+      );
+      if (!geoResponse.ok) throw new Error(`Geocoding failed (${geoResponse.status})`);
+      const geoData: any = await geoResponse.json();
+      const results: any[] = Array.isArray(geoData?.results) ? geoData.results : [];
+      // Geocoding search is fuzzy and can rank an unrelated place first, so
+      // prefer an exact (then prefix) name match, breaking ties by population.
+      const normaliseName = (value: string) => value.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
+      const target = normaliseName(destination);
+      const populationOf = (candidate: any) => (typeof candidate?.population === 'number' ? candidate.population : 0);
+      const exactMatches = results.filter(candidate => normaliseName(String(candidate?.name ?? '')) === target);
+      const prefixMatches = results.filter(candidate => normaliseName(String(candidate?.name ?? '')).startsWith(target));
+      const pool = exactMatches.length ? exactMatches : prefixMatches.length ? prefixMatches : results;
+      place = [...pool].sort((a, b) => populationOf(b) - populationOf(a))[0] ?? null;
+    } catch {
+      return { httpStatus: 502, payload: { error: 'The weather service is unavailable right now. Please try again shortly.' } };
+    }
+    if (!place) {
+      return {
+        httpStatus: 200,
+        payload: {
+          status: 'location_not_found',
+          location: null,
+          requested_start_date: startDate,
+          requested_end_date: endDate,
+          horizon_end: todayIsoInTimezone(null),
+          timezone: null,
+          days: [],
+          notes: [`We could not match "${destination}" to a real place, so no weather can be shown for this trip.`],
+          source: 'Open-Meteo',
+        },
+      };
+    }
+    latitude = Number(place.latitude);
+    longitude = Number(place.longitude);
+    timezone = typeof place.timezone === 'string' ? place.timezone : null;
+    locationName = [place.name, place.admin1, place.country]
+      .filter((part: unknown, index: number, all: unknown[]) => typeof part === 'string' && part && all.indexOf(part) === index)
+      .join(', ');
+    approximate = true;
+  }
+
+  const today = todayIsoInTimezone(timezone);
+  let horizonEnd = addDaysToIsoDate(today, FORECAST_HORIZON_DAYS);
+  const basePayload = {
+    location: {
+      name: locationName || (params.destination ?? '').trim(),
+      latitude,
+      longitude,
+      timezone: timezone ?? 'auto',
+      approximate,
+    },
+    requested_start_date: startDate,
+    requested_end_date: endDate,
+    timezone,
+    source: 'Open-Meteo',
+  };
+
+  if (endDate < today) {
+    return {
+      httpStatus: 200,
+      payload: {
+        ...basePayload,
+        status: 'past',
+        horizon_end: horizonEnd,
+        days: [],
+        notes: ['This trip has already taken place, so there is no forecast to show for it.'],
+      },
+    };
+  }
+  if (startDate > horizonEnd) {
+    return {
+      httpStatus: 200,
+      payload: {
+        ...basePayload,
+        status: 'too_far_future',
+        horizon_end: horizonEnd,
+        days: [],
+        notes: [
+          `A reliable daily forecast is not available yet for ${startDate}. Open-Meteo currently forecasts up to ${horizonEnd} for this location; check again closer to departure.`,
+        ],
+      },
+    };
+  }
+
+  const fetchStart = startDate < today ? today : startDate;
+  let fetchEnd = endDate < horizonEnd ? endDate : horizonEnd;
+
+  const buildForecastUrl = (from: string, to: string) =>
+    `${OPEN_METEO_FORECAST_URL}?latitude=${latitude}&longitude=${longitude}` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+    `&timezone=${encodeURIComponent(timezone ?? 'auto')}&start_date=${from}&end_date=${to}`;
+
+  try {
+    let forecastResponse = await fetch(buildForecastUrl(fetchStart, fetchEnd));
+    if (forecastResponse.status === 400) {
+      // Open-Meteo reports its exact allowed range; honour it and retry once
+      // with the range clamped to the real horizon.
+      const errorBody: any = await forecastResponse.json().catch(() => null);
+      const allowedTo = typeof errorBody?.reason === 'string'
+        ? errorBody.reason.match(/to (\d{4}-\d{2}-\d{2})/)?.[1]
+        : undefined;
+      if (allowedTo) {
+        horizonEnd = allowedTo;
+        if (fetchStart > horizonEnd) {
+          return {
+            httpStatus: 200,
+            payload: {
+              ...basePayload,
+              status: 'too_far_future',
+              horizon_end: horizonEnd,
+              days: [],
+              notes: [
+                `A reliable daily forecast is not available yet for ${startDate}. Open-Meteo currently forecasts up to ${horizonEnd} for this location; check again closer to departure.`,
+              ],
+            },
+          };
+        }
+        fetchEnd = fetchEnd < horizonEnd ? fetchEnd : horizonEnd;
+        forecastResponse = await fetch(buildForecastUrl(fetchStart, fetchEnd));
+      }
+    }
+    if (!forecastResponse.ok) throw new Error(`Forecast failed (${forecastResponse.status})`);
+    const forecast: any = await forecastResponse.json();
+    const daily = forecast?.daily;
+    if (!daily || !Array.isArray(daily.time)) throw new Error('Forecast response was missing daily data.');
+
+    const resolvedTimezone = typeof forecast.timezone === 'string' ? forecast.timezone : timezone;
+    const days = daily.time.map((date: string, index: number) => ({
+      date,
+      weather_code: Number(daily.weather_code?.[index] ?? -1),
+      condition: weatherConditionForCode(Number(daily.weather_code?.[index] ?? -1)),
+      temperature_max: daily.temperature_2m_max?.[index] ?? null,
+      temperature_min: daily.temperature_2m_min?.[index] ?? null,
+      precipitation_probability_max: daily.precipitation_probability_max?.[index] ?? null,
+    }));
+
+    const notes: string[] = [];
+    if (approximate) {
+      notes.push('This location was matched from the destination name saved for this older trip, so it may not be exact. New trips ask you to pick the place from suggestions.');
+    }
+    if (fetchStart > startDate) {
+      notes.push('The first part of this trip has already passed, so the forecast starts today.');
+    }
+    if (fetchEnd < endDate) {
+      notes.push(`A reliable forecast is not available yet for the rest of this trip after ${fetchEnd}; check again closer to those dates.`);
+    }
+
+    return {
+      httpStatus: 200,
+      payload: {
+        ...basePayload,
+        location: { ...basePayload.location, timezone: resolvedTimezone ?? basePayload.location.timezone },
+        timezone: resolvedTimezone,
+        status: fetchStart === startDate && fetchEnd === endDate ? 'forecast' : 'partial',
+        horizon_end: horizonEnd,
+        days,
+        notes,
+      },
+    };
+  } catch {
+    return { httpStatus: 502, payload: { error: 'The weather service is unavailable right now. Please try again shortly.' } };
+  }
+}
+
+// Weather API endpoint
+app.get('/api/weather', async (req, res) => {
+  const queryValue = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+  const result = await getTripWeather({
+    latitude: queryValue(req.query.latitude),
+    longitude: queryValue(req.query.longitude),
+    timezone: queryValue(req.query.timezone),
+    locationName: queryValue(req.query.location),
+    destination: queryValue(req.query.destination),
+    startDate: queryValue(req.query.start_date),
+    endDate: queryValue(req.query.end_date),
   });
+  res.status(result.httpStatus).json(result.payload);
 });
 
 // Development vs Production serving

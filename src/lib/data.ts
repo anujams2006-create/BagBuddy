@@ -17,6 +17,9 @@ function toTrip(row: TripRow): Trip {
   return {
     id: row.id,
     destination: row.destination,
+    latitude: row.latitude != null ? Number(row.latitude) : null,
+    longitude: row.longitude != null ? Number(row.longitude) : null,
+    timezone: row.timezone ?? null,
     start_date: row.start_date,
     end_date: row.end_date,
     travel_mode: row.travel_mode,
@@ -101,7 +104,14 @@ export async function createTrip(trip: Trip, list: PackingListResult, userId: st
   const { id: _ignoredId, created_at: _ignoredCreatedAt, ...tripFields } = trip;
   const { data: tripRow, error: tripError } = await supabase()
     .from('trips')
-    .insert({ ...tripFields, user_id: userId })
+    .insert({
+      ...tripFields,
+      // Store explicit nulls (not undefined) for trips without a selected place.
+      latitude: trip.latitude ?? null,
+      longitude: trip.longitude ?? null,
+      timezone: trip.timezone ?? null,
+      user_id: userId,
+    })
     .select('*')
     .single();
   if (tripError) throw tripError;

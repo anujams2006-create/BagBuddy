@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Trip, PackingListResult } from '../types';
 import { supabase } from '../lib/supabase';
+import { getTripWeather } from '../lib/weather';
 
 interface Message {
   id: string;
@@ -94,6 +95,19 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     try {
       const { data: { session } } = await supabase().auth.getSession();
       if (!session?.access_token) throw new Error('Please log in to use BagBuddy AI.');
+
+      // Best-effort: attach the same Open-Meteo weather the dashboard shows,
+      // so the assistant answers from real forecast data (or knows, and says,
+      // that no forecast is available yet). A weather failure never blocks chat.
+      let weather = null;
+      if (currentTrip) {
+        try {
+          weather = await getTripWeather(currentTrip);
+        } catch {
+          weather = null;
+        }
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -105,6 +119,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           tripContext: {
             trip: currentTrip,
             packingList: currentPackingList,
+            weather,
           },
           history: nextMessages.map(m => ({ role: m.role, content: m.content })),
         }),
