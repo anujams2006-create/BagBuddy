@@ -70,6 +70,17 @@ async function ownsTrip(token: string, tripId: string, userId: string): Promise<
   return !error && data?.user_id === userId;
 }
 
+function chatHasPlaneLeg(trip: any): boolean {
+  const legs = Array.isArray(trip?.transport_legs) ? trip.transport_legs : [];
+  if (legs.length) return legs.some((leg: any) => leg.transport_type === 'Plane' || leg.transport_type === 'Flight');
+  return trip?.travel_mode === 'Flight' || trip?.travel_mode === 'Plane';
+}
+function chatTransportSummary(trip: any): string {
+  const legs = Array.isArray(trip?.transport_legs) ? trip.transport_legs : [];
+  if (!legs.length) return trip?.travel_mode || '';
+  return legs.map((leg: any) => (leg.origin || '…') + ' → ' + (leg.destination || '…') + ' by ' + (leg.transport_type === 'Flight' ? 'Plane' : leg.transport_type)).join('; ');
+}
+
 function fallbackSmartResponse(message: string, trip: any, packingList: any, weather?: any): Json {
   const lower = message.toLowerCase().trim();
   const cleaned = lower
@@ -109,6 +120,11 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any, wea
   }
   if (lower.includes('weight') || lower.includes('heavy') || lower.includes('overload') || lower.includes('limit')) {
     if (!packingList) return { reply: 'You do not have an active trip selected yet. Plan or choose a trip and I will track your bag weight.' };
+    if (packingList.weight_limit == null) {
+      return { reply: chatHasPlaneLeg(trip)
+        ? 'Your bag weighs ' + packingList.total_weight + ' kg. Your trip includes a flight, but its baggage allowance has not been entered, so there is no limit to check against — I never guess an airline\'s allowance.'
+        : 'Your bag weighs ' + packingList.total_weight + ' kg. This trip has no flights, so no airline baggage limit applies — the weight is just for your information.' };
+    }
     if (packingList.overloaded) return { reply: 'Your bag weighs ' + packingList.total_weight + ' kg, which is ' + (packingList.total_weight - packingList.weight_limit).toFixed(2) + ' kg over your ' + packingList.weight_limit + ' kg limit.' };
     return { reply: 'Your bag weighs ' + packingList.total_weight + ' kg out of ' + packingList.weight_limit + ' kg. You have ' + packingList.remaining_weight + ' kg remaining.' };
   }
@@ -133,7 +149,7 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any, wea
   }
   if (lower.includes('what should i pack') || lower.includes('recommend') || lower.includes('help me pack')) {
     if (!trip) return { reply: 'Tell me where you are travelling, your dates, and how you are getting there, and I will help build the right list.' };
-    return { reply: 'For ' + trip.destination + ' by ' + trip.travel_mode + ', prioritize lightweight clothes, comfortable footwear, travel documents, and device chargers.' };
+    return { reply: 'For ' + trip.destination + ' (' + (chatTransportSummary(trip) || trip.travel_mode) + '), prioritize lightweight clothes, comfortable footwear, travel documents, and device chargers.' };
   }
   return { reply: 'I am here to help with your trip to ' + (trip?.destination ?? 'any destination') + '. Ask me to add or remove items, check bag weight, or get packing recommendations.' };
 }
@@ -185,7 +201,9 @@ export default async function handler(req: Request, res: ServerResponse): Promis
         const tripSummary = trip ? JSON.stringify({
           destination: trip.destination, latitude: trip.latitude ?? null, longitude: trip.longitude ?? null, timezone: trip.timezone ?? null,
           start_date: trip.start_date, end_date: trip.end_date,
-          travel_mode: trip.travel_mode, activities: trip.activities, weight_limit_kg: trip.weight_limit,
+          travel_mode: trip.travel_mode, transport_legs: trip.transport_legs ?? [], transport_summary: chatTransportSummary(trip),
+          baggage_limit_kg: packingList?.weight_limit ?? null,
+          activities: trip.activities, weight_limit_kg: trip.weight_limit,
           total_weight_kg: packingList?.total_weight, remaining_weight_kg: packingList?.remaining_weight,
           overloaded: packingList?.overloaded,
           items_summary: packingList?.items?.slice(0, 40).map((item: any) => item.name + ' (' + item.weight + 'kg, ' + (item.packed ? 'packed' : 'unpacked') + ')'),
@@ -200,7 +218,7 @@ export default async function handler(req: Request, res: ServerResponse): Promis
           ai.models.generateContent({
             model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
             contents,
-            config: { systemInstruction: 'You are BagBuddy AI Travel Assistant. Be friendly, practical, concise, and travel-and-packing focused. Current trip: ' + tripSummary + '. Weather data (Open-Meteo, for the trip coordinates and dates): ' + weatherSummary + '. For weather questions use ONLY that weather data: if forecast_days is empty, clearly say a reliable forecast is not available for the trip dates yet and do not invent temperatures, rain chances or conditions, and do not present current or typical weather as the trip-date forecast. Use tools for add, remove, and packed-status requests. Never invent bookings or tickets.', tools: [{ functionDeclarations: [addPackingItemTool, removePackingItemTool, togglePackedStatusTool] }] },
+            config: { systemInstruction: 'You are BagBuddy AI Travel Assistant. Be friendly, practical, concise, and travel-and-packing focused. Current trip: ' + tripSummary + '. Weather data (Open-Meteo, for the trip coordinates and dates): ' + weatherSummary + '. Baggage limits apply ONLY to Plane (flight) legs, never to car, bus, train, or other legs. If baggage_limit_kg is null and the trip has flight legs, the airline allowance is unknown: say so and suggest adding it to the flight leg; if the trip has no flight legs, say no airline baggage limit applies. Never invent an airline\'s baggage allowance. For weather questions use ONLY that weather data: if forecast_days is empty, clearly say a reliable forecast is not available for the trip dates yet and do not invent temperatures, rain chances or conditions, and do not present current or typical weather as the trip-date forecast. Use tools for add, remove, and packed-status requests. Never invent bookings or tickets.', tools: [{ functionDeclarations: [addPackingItemTool, removePackingItemTool, togglePackedStatusTool] }] },
           }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gemini timeout')), 4500)),
         ]) as any;

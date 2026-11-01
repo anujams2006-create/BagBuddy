@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Trip, PackingListResult } from '../types';
 import { supabase } from '../lib/supabase';
 import { getTripWeather } from '../lib/weather';
+import { transportSummary, tripHasPlaneLeg } from '../lib/transport';
 
 interface Message {
   id: string;
@@ -250,8 +251,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           {currentTrip ? (
             <div className="chat-trip-badge">
               <span>📍 {currentTrip.destination}</span>
-              <span>• {currentTrip.travel_mode}</span>
-              <span>• Limit: {currentTrip.weight_limit} kg</span>
+              <span>• {transportSummary(currentTrip)}</span>
+              {currentPackingList?.weight_limit != null ? (
+                <span>• Flight limit: {currentPackingList.weight_limit} kg</span>
+              ) : tripHasPlaneLeg(currentTrip) ? (
+                <span>• Flight allowance not set</span>
+              ) : null}
             </div>
           ) : (
             <div className="chat-trip-badge" style={{ justifyContent: 'space-between' }}>

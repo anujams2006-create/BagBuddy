@@ -1,6 +1,7 @@
 import React from 'react';
 import { Trip } from '../types';
 import { deleteTrip } from '../lib/data';
+import { effectiveBaggageLimit, transportSummary, tripHasPlaneLeg } from '../lib/transport';
 
 interface MyTripsProps {
   trips: Trip[];
@@ -46,7 +47,7 @@ export const MyTrips: React.FC<MyTripsProps> = ({
           {trips.map(t => (
             <article key={t.id} className="trip-card">
               <div className="trip-card-header">
-                <span className="trip-mode-pill">✈ {t.travel_mode}</span>
+                <span className="trip-mode-pill">{transportSummary(t)}</span>
                 <span className="trip-type-pill">{t.trip_type || 'Personal'}</span>
               </div>
 
@@ -56,7 +57,13 @@ export const MyTrips: React.FC<MyTripsProps> = ({
               <div className="trip-card-specs">
                 <div className="spec-unit">
                   <span>Bag allowance</span>
-                  <strong>{t.bag_type} ({t.weight_limit} kg)</strong>
+                  <strong>
+                    {effectiveBaggageLimit(t) != null
+                      ? `${t.bag_type} (flight limit ${effectiveBaggageLimit(t)} kg)`
+                      : tripHasPlaneLeg(t)
+                        ? `${t.bag_type} (flight allowance not set)`
+                        : t.bag_type}
+                  </strong>
                 </div>
                 <div className="spec-unit">
                   <span>Travelers</span>

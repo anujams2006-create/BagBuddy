@@ -125,6 +125,24 @@ const togglePackedStatusTool: FunctionDeclaration = {
   },
 };
 
+// Transport helpers for chat context. Baggage limits apply only to plane legs.
+function chatTransportLegs(trip: any): any[] {
+  return Array.isArray(trip?.transport_legs) ? trip.transport_legs : [];
+}
+function chatHasPlaneLeg(trip: any): boolean {
+  if (chatTransportLegs(trip).length) {
+    return chatTransportLegs(trip).some((leg: any) => leg.transport_type === 'Plane' || leg.transport_type === 'Flight');
+  }
+  return trip?.travel_mode === 'Flight' || trip?.travel_mode === 'Plane';
+}
+function chatTransportSummary(trip: any): string {
+  const legs = chatTransportLegs(trip);
+  if (!legs.length) return trip?.travel_mode || '';
+  return legs
+    .map((leg: any) => `${leg.origin || '…'} → ${leg.destination || '…'} by ${leg.transport_type === 'Flight' ? 'Plane' : leg.transport_type}`)
+    .join('; ');
+}
+
 // Fallback intelligent intent parser for when API key is missing or offline
 function fallbackSmartResponse(message: string, trip: any, packingList: any, weather?: any) {
   const lower = message.toLowerCase().trim();
@@ -221,6 +239,13 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any, wea
     }
     const currentWeight = packingList.total_weight;
     const limit = packingList.weight_limit;
+    if (limit == null) {
+      return {
+        reply: chatHasPlaneLeg(trip)
+          ? `Your bag currently weighs ${currentWeight} kg. Your trip includes a flight, but its baggage allowance hasn't been entered, so there's no limit to check against — I never guess an airline's allowance. Add it to the flight leg and I can check your bag against it.`
+          : `Your bag currently weighs ${currentWeight} kg. This trip has no flights, so no airline baggage limit applies — the weight is just for your information.`,
+      };
+    }
     if (packingList.overloaded) {
       const overBy = (currentWeight - limit).toFixed(2);
       return {
@@ -285,7 +310,7 @@ function fallbackSmartResponse(message: string, trip: any, packingList: any, wea
       };
     }
     const dest = trip.destination;
-    const mode = trip.travel_mode;
+    const mode = chatTransportSummary(trip) || trip.travel_mode;
     const activities = trip.activities?.join(', ') || 'sightseeing';
     return {
       reply: `For ${dest} traveling by ${mode} with ${activities}, prioritize lightweight breathable clothes, comfortable footwear, travel documents, and your device chargers. You can tell me 'Add an item' anytime and I'll put it right on your list!`,
@@ -338,6 +363,9 @@ ${trip ? JSON.stringify({
   start_date: trip.start_date,
   end_date: trip.end_date,
   travel_mode: trip.travel_mode,
+  transport_legs: trip.transport_legs ?? [],
+  transport_summary: chatTransportSummary(trip),
+  baggage_limit_kg: packingList?.weight_limit ?? null,
   trip_type: trip.trip_type,
   profile: trip.profile,
   adults: trip.adults,
@@ -369,10 +397,11 @@ RULES:
 2. If the user asks to add an item (e.g., "Add an umbrella", "Pack a rain jacket"), CALL the 'add_packing_item' tool. Confirm the action warmly with the estimated weight.
 3. If the user asks to remove an item (e.g., "Remove jeans", "Delete hairdryer"), CALL the 'remove_packing_item' tool.
 4. If the user asks to mark an item packed or unpacked, CALL the 'toggle_packed_status' tool.
-5. If the user asks about bag weight or overload, use the actual numbers from the trip context (${packingList?.total_weight || 0} kg out of ${packingList?.weight_limit || 7} kg limit).
+5. If the user asks about bag weight or overload, use the actual numbers from the trip context (total ${packingList?.total_weight ?? 0} kg; baggage limit ${packingList?.weight_limit == null ? 'none — no limit applies to this trip' : `${packingList.weight_limit} kg, applying to the flight legs only`}).
 6. For weather inquiries, use ONLY the WEATHER DATA above. If it contains forecast_days, quote those dates, conditions, temperatures and rain chances. If forecast_days is empty (for example status "too_far_future", "past" or "location_not_found"), clearly say that a reliable forecast is not available for the trip dates yet and DO NOT invent temperatures, rain chances or conditions, and do not present current or "typical" weather as the trip-date forecast.
 7. Support multi-travel modes (Flight, Train, Bus, Car, Hostel).
-8. Never invent booking confirmations or airline tickets. Keep answers travel & packing focused.`;
+8. Never invent booking confirmations or airline tickets. Keep answers travel & packing focused.
+9. Baggage limits apply ONLY to Plane (flight) legs, never to car, bus, train, or other legs. If baggage_limit_kg is null and the trip has flight legs, the airline allowance is unknown: say so, and suggest adding it to the flight leg. If the trip has no flight legs, say no airline baggage limit applies. Never invent an airline's baggage allowance.`;
 
         // Format history
         const conversationParts: any[] = [];

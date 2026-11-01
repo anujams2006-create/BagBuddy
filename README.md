@@ -6,7 +6,7 @@ is the TypeScript Express server in `server.ts`.
 
 ## Local setup
 
-1. Create a Supabase project and apply the migrations in `supabase/migrations/` in order (`202611010001_initial_bagbuddy.sql`, then `202611010002_add_trip_location_coordinates.sql`) through the SQL Editor or Supabase CLI. The second migration adds nullable `latitude`, `longitude`, and `timezone` columns to `trips`; existing trips are untouched and keep working with their text-only destination.
+1. Create a Supabase project and apply the migrations in `supabase/migrations/` in order (`202611010001_initial_bagbuddy.sql`, then `202611010002_add_trip_location_coordinates.sql`, then `202611010003_add_transport_legs.sql`) through the SQL Editor or Supabase CLI. The second migration adds nullable `latitude`, `longitude`, and `timezone` columns to `trips`; existing trips are untouched and keep working with their text-only destination. The third adds the `transport_legs` journey column described below, makes `weight_limit` nullable, and backfills existing trips with a single leg from their stored `travel_mode`.
 2. In Supabase Auth, enable Email/Password. Configure Site URL and redirect URLs for your local and Vercel URLs if email confirmation is enabled.
 3. Copy `.env.example` to `.env` and supply the project URL, publishable key, and optional Gemini key. Do not commit `.env`.
 4. Run `npm install`, then `npm run dev`.
@@ -15,6 +15,26 @@ The browser receives only `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY
 They are public client configuration, not secrets. All app-data access is enforced
 by the migration's Row Level Security policies. `GEMINI_API_KEY` remains server-only.
 BagBuddy does not use or require a Supabase service-role key.
+
+## Transport legs and baggage
+
+A trip's journey is an ordered list of transport legs (origin → destination
+by Plane, Train, Bus, Car, Hostel move, or Other), stored in the
+`transport_legs` jsonb column. The trip form lets users add, edit, remove,
+and reorder legs, validates that each leg is complete and that consecutive
+legs connect, and packing suggestions include the essentials for every kind
+of transport used. The old `travel_mode` column is still written as a legacy
+summary (single-leg name, or `Multi`), and trips saved before legs existed
+are backfilled by migration `202611010003` and synthesised client-side if
+needed, so they load unchanged.
+
+Airline baggage limits apply **only to plane legs**. Each flight leg can
+carry the allowance that airline gives (entered by the user — never
+guessed). The enforced packing limit is the smallest allowance across the
+trip's flight legs, stored in `trips.weight_limit`. Trips without flights,
+or whose flight allowance hasn't been entered, have `weight_limit = null`:
+no limit is shown or enforced anywhere in the app, including the chat
+assistant, which receives the legs and the baggage limit in its trip context.
 
 ## Weather
 

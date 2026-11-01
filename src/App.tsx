@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { User, Trip, PackingListResult, PackingItem } from './types';
-import { createTrip, currentUser as getCurrentUser, listTrips, loadPackingList, syncPackingItems } from './lib/data';
+import { createTrip, currentUser as getCurrentUser, listTrips, loadPackingList, packingListFromItems, syncPackingItems } from './lib/data';
 import { supabase, supabaseConfigured } from './lib/supabase';
 import { Header } from './components/Header';
 import { Home } from './components/Home';
@@ -135,110 +135,34 @@ export function App() {
       packed: false,
     };
 
-    const updatedCategories = { ...currentPackingList.categories };
-    if (!updatedCategories[categoryKey]) {
-      updatedCategories[categoryKey] = [];
-    }
-    updatedCategories[categoryKey] = [...updatedCategories[categoryKey], newItem];
-
-    const updatedItems = [...currentPackingList.items, newItem];
-    const newTotalWeight = Number(
-      updatedItems.reduce((acc, curr) => acc + curr.weight, 0).toFixed(2)
-    );
-    const newRemaining = Number((currentPackingList.weight_limit - newTotalWeight).toFixed(2));
-    const isOverloaded = newTotalWeight > currentPackingList.weight_limit;
-
-    const updatedList: PackingListResult = {
-      ...currentPackingList,
-      categories: updatedCategories,
-      items: updatedItems,
-      total_weight: newTotalWeight,
-      remaining_weight: newRemaining,
-      overloaded: isOverloaded,
-    };
-
-    void handleUpdatePackingList(updatedList);
+    void handleUpdatePackingList(packingListFromItems(currentTrip, [...currentPackingList.items, newItem]));
   };
 
   const handleRemoveItemFromChat = (itemName: string): boolean => {
     if (!currentTrip || !currentPackingList) return false;
     const search = itemName.trim().toLowerCase();
-
-    let found = false;
-    const updatedCategories: Record<string, PackingItem[]> = {};
-
-    for (const [cat, items] of Object.entries(currentPackingList.categories)) {
-      const remainingInCat = items.filter(item => {
-        const match = item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase());
-        if (match && !found) {
-          found = true;
-          return false;
-        }
-        return true;
-      });
-      if (remainingInCat.length > 0) {
-        updatedCategories[cat] = remainingInCat;
-      }
-    }
-
-    if (!found) return false;
-
-    const updatedItems: PackingItem[] = [];
-    for (const catItems of Object.values(updatedCategories)) {
-      updatedItems.push(...catItems);
-    }
-
-    const newTotalWeight = Number(
-      updatedItems.reduce((acc, curr) => acc + curr.weight, 0).toFixed(2)
+    const index = currentPackingList.items.findIndex(
+      item => item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase())
     );
-    const newRemaining = Number((currentPackingList.weight_limit - newTotalWeight).toFixed(2));
-    const isOverloaded = newTotalWeight > currentPackingList.weight_limit;
-
-    const updatedList: PackingListResult = {
-      ...currentPackingList,
-      categories: updatedCategories,
-      items: updatedItems,
-      total_weight: newTotalWeight,
-      remaining_weight: newRemaining,
-      overloaded: isOverloaded,
-    };
-
-    void handleUpdatePackingList(updatedList);
+    if (index === -1) return false;
+    const updatedItems = currentPackingList.items.filter((_, i) => i !== index);
+    void handleUpdatePackingList(packingListFromItems(currentTrip, updatedItems));
     return true;
   };
 
   const handleTogglePackedFromChat = (itemName: string, packed: boolean): boolean => {
     if (!currentTrip || !currentPackingList) return false;
     const search = itemName.trim().toLowerCase();
-
     let updated = false;
-    const updatedCategories: Record<string, PackingItem[]> = {};
     const updatedItems = currentPackingList.items.map(item => {
-      if ((item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase())) && !updated) {
+      if (!updated && (item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase()))) {
         updated = true;
         return { ...item, packed };
       }
       return item;
     });
-
-    for (const [cat, items] of Object.entries(currentPackingList.categories)) {
-      updatedCategories[cat] = items.map(item => {
-        if (item.name.toLowerCase().includes(search) || search.includes(item.name.toLowerCase())) {
-          return { ...item, packed };
-        }
-        return item;
-      });
-    }
-
     if (!updated) return false;
-
-    const updatedList: PackingListResult = {
-      ...currentPackingList,
-      categories: updatedCategories,
-      items: updatedItems,
-    };
-
-    void handleUpdatePackingList(updatedList);
+    void handleUpdatePackingList(packingListFromItems(currentTrip, updatedItems));
     return true;
   };
 

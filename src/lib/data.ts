@@ -1,5 +1,6 @@
 import type { User, Trip, PackingItem, PackingListResult } from '../types';
 import { supabase } from './supabase';
+import { asTransportLegs, effectiveBaggageLimit, transportSummary } from './transport';
 
 type TripRow = Omit<Trip, 'id' | 'created_at'> & {
   id: string;
@@ -23,13 +24,16 @@ function toTrip(row: TripRow): Trip {
     start_date: row.start_date,
     end_date: row.end_date,
     travel_mode: row.travel_mode,
+    // Stored legs (jsonb). Legacy rows without legs keep an empty list here;
+    // helpers in lib/transport synthesise the equivalent single leg on demand.
+    transport_legs: asTransportLegs(row.transport_legs),
     trip_type: row.trip_type,
     profile: row.profile,
     adults: row.adults,
     children: row.children,
     child_age: row.child_age ?? '',
     bag_type: row.bag_type,
-    weight_limit: Number(row.weight_limit),
+    weight_limit: row.weight_limit != null ? Number(row.weight_limit) : null,
     activities: asStringArray(row.activities),
     personalization: asStringArray(row.personalization),
     toiletries: asStringArray(row.toiletries),
@@ -55,10 +59,24 @@ export function packingListFromItems(trip: Trip, items: PackingItem[]): PackingL
     (categories[item.category] ??= []).push(item);
   }
   const total_weight = Number(items.reduce((total, item) => total + item.weight, 0).toFixed(2));
-  const remaining_weight = Number((trip.weight_limit - total_weight).toFixed(2));
+  // Baggage limits apply only to plane legs; null means no limit is enforced.
+  const weight_limit = effectiveBaggageLimit(trip);
+  const remaining_weight = weight_limit != null ? Number((weight_limit - total_weight).toFixed(2)) : null;
+  const overloaded = weight_limit != null && total_weight > weight_limit;
   const start = new Date(`${trip.start_date}T00:00:00Z`);
   const end = new Date(`${trip.end_date}T00:00:00Z`);
   const duration = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1);
+
+  const items_to_remove: PackingItem[] = [];
+  if (overloaded && weight_limit != null) {
+    const excess = total_weight - weight_limit;
+    let removedWeight = 0;
+    for (const item of [...items].sort((a, b) => b.weight - a.weight)) {
+      if (removedWeight >= excess) break;
+      items_to_remove.push(item);
+      removedWeight += item.weight;
+    }
+  }
 
   return {
     categories,
@@ -66,12 +84,12 @@ export function packingListFromItems(trip: Trip, items: PackingItem[]): PackingL
     duration,
     destination: trip.destination,
     profile: trip.profile,
-    travel_mode: trip.travel_mode,
+    travel_mode: transportSummary(trip),
     total_weight,
-    weight_limit: trip.weight_limit,
+    weight_limit,
     remaining_weight,
-    overloaded: total_weight > trip.weight_limit,
-    items_to_remove: [],
+    overloaded,
+    items_to_remove,
   };
 }
 
@@ -110,6 +128,10 @@ export async function createTrip(trip: Trip, list: PackingListResult, userId: st
       latitude: trip.latitude ?? null,
       longitude: trip.longitude ?? null,
       timezone: trip.timezone ?? null,
+      // Persist the journey legs (normalised) and the effective plane-only
+      // baggage limit; null weight_limit means no limit applies.
+      transport_legs: asTransportLegs(trip.transport_legs),
+      weight_limit: trip.weight_limit ?? null,
       user_id: userId,
     })
     .select('*')

@@ -3,6 +3,14 @@ import { Trip, PackingListResult } from '../types';
 import { generatePackingList } from '../packingEngine';
 import { PlaceAutocomplete } from './PlaceAutocomplete';
 import type { PlaceResult } from '../lib/weather';
+import { TransportLegsEditor } from './TransportLegsEditor';
+import type { TransportLeg } from '../types';
+import {
+  createTransportLeg,
+  legacyTravelModeValue,
+  planeLegs,
+  validateTransportLegs,
+} from '../lib/transport';
 
 interface TripSetupProps {
   onTripCreated: (trip: Trip, list: PackingListResult) => Promise<void>;
@@ -36,7 +44,9 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
   const [selectedPlace, setSelectedPlace] = useState<PlaceResult | null>(null);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [travelMode, setTravelMode] = useState('Flight');
+  // The journey is a list of transport legs (car, plane, bus, …), not one mode.
+  const [legs, setLegs] = useState<TransportLeg[]>([createTransportLeg({ transport_type: 'Plane' })]);
+  const [legErrors, setLegErrors] = useState<string[]>([]);
   const [tripType, setTripType] = useState('Vacation');
   const [profile, setProfile] = useState('Female');
   const [adults, setAdults] = useState(1);
@@ -47,14 +57,33 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
   const [shiftingItems, setShiftingItems] = useState<string[]>([]);
   const [personalization, setPersonalization] = useState<string[]>(['Skincare', 'Sunscreen']);
   const [bagType, setBagType] = useState('Cabin Bag');
-  const [weightLimit, setWeightLimit] = useState(7);
   const [toiletries, setToiletries] = useState<string[]>(['Toothbrush', 'Toothpaste', 'Soap', 'Sunscreen']);
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const isHostel = travelMode === 'Hostel';
+  const isHostel = legs.some(leg => leg.transport_type === 'Hostel');
+  const flightLegs = planeLegs(legs);
+  const flightAllowances = flightLegs
+    .map(leg => leg.baggage_allowance_kg)
+    .filter((value): value is number => typeof value === 'number' && value > 0);
+  // The enforced limit is the smallest flight allowance; null = no limit.
+  const effectiveLimit = flightAllowances.length ? Math.min(...flightAllowances) : null;
+
+  // When a destination place is picked, pre-fill the last leg's destination
+  // if it is still blank (the user can always edit it).
+  const handlePlaceChange = (place: PlaceResult | null) => {
+    setSelectedPlace(place);
+    if (place) {
+      setLegs(prev => {
+        if (!prev.length) return prev;
+        const last = prev[prev.length - 1];
+        if (last.destination.trim()) return prev;
+        return [...prev.slice(0, -1), { ...last, destination: place.name }];
+      });
+    }
+  };
 
   const handleProfileChange = (newProfile: string) => {
     setProfile(newProfile);
@@ -135,8 +164,10 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
     if (startDate && endDate && endDate < startDate) {
       newErrors.endDate = 'Return must be on or after departure.';
     }
-    if (!travelMode) {
-      newErrors.travelMode = 'Please choose a travel mode.';
+    const foundLegErrors = validateTransportLegs(legs);
+    setLegErrors(foundLegErrors);
+    if (foundLegErrors.length > 0) {
+      newErrors.legs = foundLegErrors[0];
     }
     if (!isHostel && !tripType) {
       newErrors.tripType = 'Please choose a trip type.';
@@ -163,14 +194,16 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
       timezone: place.timezone ?? null,
       start_date: startDate,
       end_date: endDate,
-      travel_mode: travelMode,
+      travel_mode: legacyTravelModeValue(legs),
+      transport_legs: legs,
       trip_type: isHostel ? '' : tripType,
       profile,
       adults: Number(adults) || 1,
       children: hasChildren ? Number(children) || 0 : 0,
       child_age: hasChildren ? childAge : '',
       bag_type: bagType,
-      weight_limit: Number(weightLimit) || 7,
+      // Only plane legs carry a baggage limit (see leg editor); null = none.
+      weight_limit: effectiveLimit,
       activities: isHostel ? [] : activities,
       personalization,
       toiletries,
@@ -213,7 +246,7 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
               <PlaceAutocomplete
                 id="destination"
                 selectedPlace={selectedPlace}
-                onChange={setSelectedPlace}
+                onChange={handlePlaceChange}
                 hasError={!!errors.destination}
               />
               <small className="field-error">{errors.destination}</small>
@@ -245,45 +278,20 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
           </div>
         </section>
 
-        {/* Section 02: Travel Mode */}
+        {/* Section 02: Journey legs */}
         <section className="trip-section">
           <div className="section-heading">
             <span>02</span>
             <div>
               <h2>How are you travelling?</h2>
-              <p>Choose the journey that best matches your plan.</p>
+              <p>Add each part of your journey — you can mix transport, like a car to the airport, a flight, then a bus.</p>
             </div>
           </div>
 
-          <fieldset className="selection-grid mode-grid">
-            <legend className="sr-only">Travel mode</legend>
-            {[
-              { value: 'Flight', icon: '✈', title: 'Flight', detail: 'Fast & convenient' },
-              { value: 'Train', icon: '🚆', title: 'Train', detail: 'Settle in and enjoy the view' },
-              { value: 'Bus', icon: '🚌', title: 'Bus', detail: 'Easy and flexible' },
-              { value: 'Car', icon: '🚗', title: 'Car', detail: 'Go at your own pace' },
-              { value: 'Hostel', icon: '🧳', title: 'Hostel move', detail: 'Packing for a new room' },
-            ].map(m => (
-              <label
-                key={m.value}
-                className={`selection-card ${travelMode === m.value ? 'selected' : ''}`}
-                onClick={() => setTravelMode(m.value)}
-              >
-                <input
-                  type="radio"
-                  name="travel_mode"
-                  value={m.value}
-                  checked={travelMode === m.value}
-                  onChange={() => setTravelMode(m.value)}
-                />
-                <span className="selection-icon" aria-hidden="true">{m.icon}</span>
-                <span className="selection-title">{m.title}</span>
-                <small>{m.detail}</small>
-                <i aria-hidden="true">✓</i>
-              </label>
-            ))}
-          </fieldset>
-          <small className="field-error">{errors.travelMode}</small>
+          <TransportLegsEditor legs={legs} onChange={setLegs} />
+          {legErrors.map(error => (
+            <small key={error} className="field-error" style={{ display: 'block' }}>{error}</small>
+          ))}
         </section>
 
         {/* Section 03: Trip Type (Hidden if Hostel) */}
@@ -555,7 +563,7 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
             <span>06</span>
             <div>
               <h2>Your bag</h2>
-              <p>Choose the bag you’re taking and its weight allowance.</p>
+              <p>Choose the bag you’re taking. Baggage limits only apply to flights.</p>
             </div>
           </div>
 
@@ -586,18 +594,28 @@ export const TripSetup: React.FC<TripSetupProps> = ({ onTripCreated }) => {
             ))}
           </fieldset>
 
-          <div className="form-grid bag-weight">
-            <div className="form-group">
-              <label htmlFor="weight_limit">Bag weight limit (kg)</label>
-              <input
-                id="weight_limit"
-                type="number"
-                value={weightLimit}
-                min="1"
-                step="0.5"
-                onChange={e => setWeightLimit(parseFloat(e.target.value) || 7)}
-              />
-            </div>
+          <div className="baggage-note">
+            {flightLegs.length === 0 && (
+              <p>
+                This journey has no flights, so <strong>no airline baggage limit applies</strong> —
+                pack what fits your {bagType.toLowerCase()}.
+              </p>
+            )}
+            {flightLegs.length > 0 && effectiveLimit != null && (
+              <p>
+                Your packing limit comes from your flight{flightLegs.length > 1 ? 's' : ''}: the
+                smallest airline allowance applies, currently <strong>{effectiveLimit} kg</strong>.
+                It applies to your flight leg{flightLegs.length > 1 ? 's' : ''} only, not to the
+                rest of your journey.
+              </p>
+            )}
+            {flightLegs.length > 0 && effectiveLimit == null && (
+              <p>
+                You have a flight in this journey but haven't entered its baggage allowance, so{' '}
+                <strong>no baggage limit will be enforced</strong>. BagBuddy won't guess your
+                airline's allowance — add it in the flight leg above whenever you're ready.
+              </p>
+            )}
           </div>
         </section>
 

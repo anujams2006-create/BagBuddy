@@ -1,5 +1,6 @@
 import React from 'react';
 import { Trip, PackingListResult, User } from '../types';
+import { effectiveBaggageLimit, transportSummary, tripHasPlaneLeg } from '../lib/transport';
 
 interface HomeProps {
   currentUser: User | null;
@@ -54,7 +55,7 @@ export const Home: React.FC<HomeProps> = ({
               <>
                 <div className="plan-card-header">
                   <span className="plan-card-eyebrow">✈ YOUR UPCOMING TRIP</span>
-                  <span className="plan-mode-badge">{currentTrip.travel_mode}</span>
+                  <span className="plan-mode-badge">{transportSummary(currentTrip)}</span>
                 </div>
 
                 <div className="plan-destination-block">
@@ -77,7 +78,13 @@ export const Home: React.FC<HomeProps> = ({
                   </div>
                   <div className="plan-spec-item">
                     <span className="spec-label">Bag Allowance</span>
-                    <strong className="spec-value">{currentTrip.bag_type} ({currentTrip.weight_limit} kg)</strong>
+                    <strong className="spec-value">
+                      {effectiveBaggageLimit(currentTrip) != null
+                        ? `${currentTrip.bag_type} (flight limit ${effectiveBaggageLimit(currentTrip)} kg)`
+                        : tripHasPlaneLeg(currentTrip)
+                          ? `${currentTrip.bag_type} (flight allowance not set)`
+                          : currentTrip.bag_type}
+                    </strong>
                   </div>
                 </div>
 

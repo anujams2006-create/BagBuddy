@@ -1,4 +1,5 @@
 import { Trip, PackingItem, PackingListResult } from './types';
+import { effectiveBaggageLimit, getTransportLegs, transportSummary } from './lib/transport';
 
 export function calculateDuration(startDate: string, endDate: string): number {
   try {
@@ -46,7 +47,11 @@ export function generatePackingList(trip: Trip): PackingListResult {
   const startDate = trip.start_date || '';
   const endDate = trip.end_date || '';
   const duration = calculateDuration(startDate, endDate);
-  const travelMode = trip.travel_mode || '';
+  // Transport is a list of legs now; suggestions include the essentials for
+  // every kind of transport the journey uses (legacy trips get one
+  // synthesised leg from their old travel_mode).
+  const transportLegs = getTransportLegs(trip);
+  const transportModes = new Set(transportLegs.map(leg => leg.transport_type));
   const tripType = trip.trip_type || '';
   const profile = trip.profile || '';
   const activities = trip.activities || [];
@@ -55,7 +60,8 @@ export function generatePackingList(trip: Trip): PackingListResult {
   const shiftingItems = trip.shifting_items || [];
   const adults = Number(trip.adults) || 1;
   const children = Number(trip.children) || 0;
-  const weightLimit = Number(trip.weight_limit) || 7.0;
+  // Baggage limits apply only to plane legs; null = no limit to enforce.
+  const weightLimit = effectiveBaggageLimit(trip);
 
   const categories: Record<string, PackingItem[]> = {};
 
@@ -186,8 +192,8 @@ export function generatePackingList(trip: Trip): PackingListResult {
     addItem(categories, '✨ Party', 'Perfume / Cologne', 1, 0.15);
   }
 
-  // Travel Mode
-  if (travelMode === 'Hostel') {
+  // Transport legs: add the essentials for each kind of transport used.
+  if (transportModes.has('Hostel')) {
     const hostelDefaults = [
       { name: 'Bedsheet', weight: 0.50 },
       { name: 'Pillow Cover', weight: 0.15 },
@@ -210,16 +216,20 @@ export function generatePackingList(trip: Trip): PackingListResult {
         addItem(categories, '🏠 Hostel Essentials', item, 1, 0.25);
       }
     }
-  } else if (travelMode === 'Flight') {
+  }
+  if (transportModes.has('Plane')) {
     addItem(categories, '✈️ Travel Essentials', 'Neck Pillow', 1, 0.25);
     addItem(categories, '✈️ Travel Essentials', 'Travel Pouch', 1, 0.10);
-  } else if (travelMode === 'Train') {
+  }
+  if (transportModes.has('Train')) {
     addItem(categories, '🚆 Train Essentials', 'Travel Pillow', 1, 0.30);
     addItem(categories, '🚆 Train Essentials', 'Eye Mask', 1, 0.03);
-  } else if (travelMode === 'Bus') {
+  }
+  if (transportModes.has('Bus')) {
     addItem(categories, '🚌 Bus Essentials', 'Neck Pillow', 1, 0.25);
     addItem(categories, '🚌 Bus Essentials', 'Water Bottle', 1, 0.20);
-  } else if (travelMode === 'Car') {
+  }
+  if (transportModes.has('Car')) {
     addItem(categories, '🚗 Car Essentials', 'Travel Pillow', 1, 0.30);
     addItem(categories, '🚗 Car Essentials', 'Car Charger', 1, 0.10);
   }
@@ -246,12 +256,12 @@ export function generatePackingList(trip: Trip): PackingListResult {
     allItems.reduce((sum, item) => sum + item.weight, 0).toFixed(2)
   );
 
-  const remainingWeight = Number((weightLimit - totalWeight).toFixed(2));
-  const overloaded = totalWeight > weightLimit;
+  const remainingWeight = weightLimit != null ? Number((weightLimit - totalWeight).toFixed(2)) : null;
+  const overloaded = weightLimit != null && totalWeight > weightLimit;
 
-  // Items to remove suggestion
+  // Items to remove suggestion (only when a baggage limit actually applies)
   const itemsToRemove: PackingItem[] = [];
-  if (overloaded) {
+  if (overloaded && weightLimit != null) {
     const excess = totalWeight - weightLimit;
     const sorted = [...allItems].sort((a, b) => b.weight - a.weight);
     let removedWeight = 0;
@@ -268,7 +278,7 @@ export function generatePackingList(trip: Trip): PackingListResult {
     duration,
     destination,
     profile,
-    travel_mode: travelMode,
+    travel_mode: transportSummary(trip),
     total_weight: totalWeight,
     weight_limit: weightLimit,
     remaining_weight: remainingWeight,

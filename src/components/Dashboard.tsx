@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Trip, PackingListResult, User, PackingItem } from '../types';
 import { WeatherCard } from './WeatherCard';
+import { packingListFromItems } from '../lib/data';
+import { getTransportLegs, transportIcon, transportLabel, transportSummary, tripHasPlaneLeg } from '../lib/transport';
 
 interface DashboardProps {
   currentUser: User | null;
@@ -57,30 +59,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const progressPercent = allItems.length ? Math.round((packedCount / allItems.length) * 100) : 0;
 
   const handleToggleItem = (itemId: string) => {
-    const updatedCategories: Record<string, PackingItem[]> = {};
-    const updatedItems = currentPackingList.items.map(item => {
-      if (item.id === itemId) {
-        return { ...item, packed: !item.packed };
-      }
-      return item;
-    });
-
-    for (const [cat, items] of Object.entries(currentPackingList.categories)) {
-      updatedCategories[cat] = items.map(item => {
-        if (item.id === itemId) {
-          return { ...item, packed: !item.packed };
-        }
-        return item;
-      });
-    }
-
-    const updatedList: PackingListResult = {
-      ...currentPackingList,
-      categories: updatedCategories,
-      items: updatedItems,
-    };
-
-    onUpdatePackingList(updatedList);
+    const updatedItems = currentPackingList.items.map(item =>
+      item.id === itemId ? { ...item, packed: !item.packed } : item
+    );
+    onUpdatePackingList(packingListFromItems(currentTrip, updatedItems));
   };
 
   const handleAddItem = (e: React.FormEvent) => {
@@ -97,59 +79,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
       packed: false,
     };
 
-    const updatedCategories = { ...currentPackingList.categories };
-    if (!updatedCategories[categoryKey]) {
-      updatedCategories[categoryKey] = [];
-    }
-    updatedCategories[categoryKey] = [...updatedCategories[categoryKey], newItem];
-
-    const updatedItems = [...currentPackingList.items, newItem];
-    const newTotalWeight = Number(
-      updatedItems.reduce((acc, curr) => acc + curr.weight, 0).toFixed(2)
-    );
-    const newRemaining = Number((currentPackingList.weight_limit - newTotalWeight).toFixed(2));
-    const isOverloaded = newTotalWeight > currentPackingList.weight_limit;
-
-    const updatedList: PackingListResult = {
-      ...currentPackingList,
-      categories: updatedCategories,
-      items: updatedItems,
-      total_weight: newTotalWeight,
-      remaining_weight: newRemaining,
-      overloaded: isOverloaded,
-    };
-
-    onUpdatePackingList(updatedList);
+    onUpdatePackingList(packingListFromItems(currentTrip, [...currentPackingList.items, newItem]));
     setNewItemName('');
     setShowAddModal(false);
   };
 
-  const handleRemoveItem = (itemId: string, category: string) => {
-    const updatedCategories = { ...currentPackingList.categories };
-    if (updatedCategories[category]) {
-      updatedCategories[category] = updatedCategories[category].filter(i => i.id !== itemId);
-      if (updatedCategories[category].length === 0) {
-        delete updatedCategories[category];
-      }
-    }
-
-    const updatedItems = currentPackingList.items.filter(i => i.id !== itemId);
-    const newTotalWeight = Number(
-      updatedItems.reduce((acc, curr) => acc + curr.weight, 0).toFixed(2)
+  const handleRemoveItem = (itemId: string) => {
+    onUpdatePackingList(
+      packingListFromItems(currentTrip, currentPackingList.items.filter(i => i.id !== itemId))
     );
-    const newRemaining = Number((currentPackingList.weight_limit - newTotalWeight).toFixed(2));
-    const isOverloaded = newTotalWeight > currentPackingList.weight_limit;
-
-    const updatedList: PackingListResult = {
-      ...currentPackingList,
-      categories: updatedCategories,
-      items: updatedItems,
-      total_weight: newTotalWeight,
-      remaining_weight: newRemaining,
-      overloaded: isOverloaded,
-    };
-
-    onUpdatePackingList(updatedList);
   };
 
   return (
@@ -185,8 +123,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <strong>{currentTrip.start_date} – {currentTrip.end_date}</strong>
           </div>
           <div className="trip-detail">
-            <span>Travel mode</span>
-            <strong>{currentTrip.travel_mode}</strong>
+            <span>Journey</span>
+            <strong>{transportSummary(currentTrip)}</strong>
           </div>
           <div className="trip-detail">
             <span>Packing profile</span>
@@ -197,6 +135,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <strong>{currentTrip.bag_type}</strong>
           </div>
         </div>
+        {getTransportLegs(currentTrip).length > 0 && (
+          <ol className="legs-summary">
+            {getTransportLegs(currentTrip).map(leg => (
+              <li key={leg.id} className="legs-summary-item">
+                <span aria-hidden="true">{transportIcon(leg.transport_type)}</span>
+                <span>
+                  {[leg.origin, leg.destination].filter(Boolean).join(' → ') || currentTrip.destination}
+                  {' · '}
+                  {transportLabel(leg.transport_type)}
+                  {leg.departure_time || leg.arrival_time
+                    ? ` · ${[leg.departure_time, leg.arrival_time].filter(Boolean).join(' – ')}`
+                    : ''}
+                  {leg.transport_type === 'Plane' &&
+                    ` · Baggage: ${leg.baggage_allowance_kg != null ? `${leg.baggage_allowance_kg} kg` : 'allowance not set'}`}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
 
       {/* Weather for the trip's location and dates */}
@@ -208,23 +165,48 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <span>Estimated weight</span>
           <h2>{currentPackingList.total_weight} kg</h2>
         </div>
-        <div className="weight-card">
-          <span>Bag limit</span>
-          <h2>{currentPackingList.weight_limit} kg</h2>
-        </div>
-        <div className="weight-card">
-          <span>{currentPackingList.overloaded ? 'Over by' : 'Remaining'}</span>
-          <h2>
-            {currentPackingList.overloaded
-              ? (currentPackingList.total_weight - currentPackingList.weight_limit).toFixed(2)
-              : currentPackingList.remaining_weight}{' '}
-            kg
-          </h2>
-        </div>
+        {currentPackingList.weight_limit != null ? (
+          <>
+            <div className="weight-card">
+              <span>Flight baggage limit</span>
+              <h2>{currentPackingList.weight_limit} kg</h2>
+            </div>
+            <div className="weight-card">
+              <span>{currentPackingList.overloaded ? 'Over by' : 'Remaining'}</span>
+              <h2>
+                {currentPackingList.overloaded
+                  ? (currentPackingList.total_weight - currentPackingList.weight_limit).toFixed(2)
+                  : currentPackingList.remaining_weight}{' '}
+                kg
+              </h2>
+            </div>
+          </>
+        ) : (
+          <div className="weight-card">
+            <span>Baggage limit</span>
+            <h2 style={{ fontSize: '1.05rem' }}>No limit applies</h2>
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: '0.82rem' }}>
+              {tripHasPlaneLeg(currentTrip)
+                ? 'Add your airline’s allowance to a flight leg to check your bag against it.'
+                : 'This trip has no flights, so there is no airline baggage limit.'}
+            </p>
+          </div>
+        )}
       </section>
 
-      {/* Overload Alert or Success */}
-      {currentPackingList.overloaded ? (
+      {/* Overload Alert or Success (only when a baggage limit applies) */}
+      {currentPackingList.weight_limit == null ? (
+        <section className="weight-success">
+          <div>
+            <h2>No baggage limit to check against.</h2>
+            <p>
+              {tripHasPlaneLeg(currentTrip)
+                ? 'Your trip includes a flight, but its baggage allowance hasn’t been entered, so nothing is enforced. BagBuddy never guesses an airline’s allowance.'
+                : 'Baggage limits only apply to flights, and this trip has none — your bag weight is shown for information only.'}
+            </p>
+          </div>
+        </section>
+      ) : currentPackingList.overloaded ? (
         <section className="overload-warning">
           <div>
             <h2>Your bag is over the recommended limit.</h2>
@@ -343,7 +325,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span>Qty {item.quantity}</span>
                     <span>{item.weight} kg</span>
                     <button
-                      onClick={() => handleRemoveItem(item.id, category)}
+                      onClick={() => handleRemoveItem(item.id)}
                       style={{
                         background: 'none',
                         border: 'none',
